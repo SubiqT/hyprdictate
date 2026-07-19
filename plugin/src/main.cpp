@@ -21,28 +21,6 @@
 
 namespace {
 
-    // Register the plugin's Hyprland config values. Following
-    // hyprwsmode's precedent these live in the `plugin:hyprdictate:*`
-    // namespace and are consumed via HyprlandAPI::getConfigValue by
-    // whichever subsystem needs them (indicator.cpp today; future
-    // features add to this table without a globals bump).
-    void registerConfigValues() {
-        auto border = makeShared<Config::Values::CBoolValue>(
-            "plugin:hyprdictate:indicator_border",
-            "Highlight the recording target window's border while dictating",
-            false);
-        HyprlandAPI::addConfigValueV2(PHANDLE, border);
-
-        // ARGB integer; hyprland.conf accepts 0xAARRGGBB literals for
-        // this type. Default is a muted red so a mis-configured
-        // enabler doesn't disappear against typical themes.
-        auto color = makeShared<Config::Values::CColorValue>(
-            "plugin:hyprdictate:indicator_border_color",
-            "Border colour applied while dictating (0xAARRGGBB)",
-            Config::INTEGER{0xffff5555ULL});
-        HyprlandAPI::addConfigValueV2(PHANDLE, color);
-    }
-
     // Track the Recording edge so the border override fires exactly
     // once per record cycle. Falling into Recording again without an
     // intervening Idle would apply the override twice; explicit edge
@@ -131,12 +109,12 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
 
     // Register Hyprland config values before reloading so user
     // hyprland.conf values are honoured on first parse. Same order
-    // hyprwsmode uses.
-    registerConfigValues();
+    // hyprwsmode uses. Indicator owns its own config values.
+    hyprdictate::g_plugin.indicator = std::make_unique<hyprdictate::Indicator>();
+    hyprdictate::g_plugin.indicator->registerConfig();
     HyprlandAPI::reloadConfig();
 
     hyprdictate::g_plugin.injector  = std::make_unique<hyprdictate::Injector>();
-    hyprdictate::g_plugin.indicator = std::make_unique<hyprdictate::Indicator>();
 
     hyprdictate::g_plugin.socket = std::make_unique<hyprdictate::SocketClient>(
         hyprdictate::SocketClient::Callbacks{

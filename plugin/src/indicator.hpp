@@ -15,7 +15,11 @@
 // until we see that flake in real use.
 
 #include <hyprland/src/config/shared/complex/ComplexDataTypes.hpp>
+#include <hyprland/src/config/values/ConfigValues.hpp>
+#include <hyprland/src/config/values/types/BoolValue.hpp>
+#include <hyprland/src/config/values/types/ColorValue.hpp>
 #include <hyprland/src/desktop/DesktopTypes.hpp>
+#include <hyprland/src/helpers/memory/Memory.hpp>
 
 namespace hyprdictate {
 
@@ -26,6 +30,14 @@ namespace hyprdictate {
 
         Indicator(const Indicator&)            = delete;
         Indicator& operator=(const Indicator&) = delete;
+
+        // Called at PLUGIN_INIT time. Registers the plugin's config
+        // values with Hyprland and stashes the returned shared_ptrs
+        // so startRecording can read them via ->value() without
+        // going through HyprlandAPI::getConfigValue (whose raw-
+        // pointer return type is not polymorphic and can't be
+        // dynamic_cast to the typed value).
+        void registerConfig();
 
         // Called on the Idle→Recording transition. If the plugin
         // config's `indicator_border` is enabled, snapshots the
@@ -40,6 +52,9 @@ namespace hyprdictate {
         void stopRecording();
 
     private:
+        SP<Config::Values::CBoolValue>  m_borderEnabled;
+        SP<Config::Values::CColorValue> m_borderColor;
+
         PHLWINDOWREF                m_target;
         Config::CGradientValueData  m_savedBorder;
         bool                        m_saved = false;

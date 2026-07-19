@@ -14,6 +14,28 @@ namespace hyprdictate {
 
     Indicator::Indicator() = default;
 
+    void Indicator::registerConfig() {
+        // Match hyprwsmode's config-registration pattern: keep the
+        // shared_ptr returned by makeShared so we can read via
+        // ->value() at runtime. HyprlandAPI::getConfigValue's raw-
+        // pointer return isn't polymorphic and can't be safely
+        // dynamic_cast to the typed value.
+        m_borderEnabled = makeShared<Config::Values::CBoolValue>(
+            "plugin:hyprdictate:indicator_border",
+            "Highlight the recording target window's border while dictating",
+            false);
+        HyprlandAPI::addConfigValueV2(PHANDLE, m_borderEnabled);
+
+        // ARGB integer; hyprland.conf accepts 0xAARRGGBB literals for
+        // this type. Default is a muted red so a mis-configured
+        // enabler doesn't disappear against typical themes.
+        m_borderColor = makeShared<Config::Values::CColorValue>(
+            "plugin:hyprdictate:indicator_border_color",
+            "Border colour applied while dictating (0xAARRGGBB)",
+            Config::INTEGER{0xffff5555ULL});
+        HyprlandAPI::addConfigValueV2(PHANDLE, m_borderColor);
+    }
+
     namespace {
 
         // Read the plugin's config values via HyprlandAPI. Returns
@@ -24,31 +46,13 @@ namespace hyprdictate {
             uint64_t argb    = 0xffff5555;
         };
 
-        SIndicatorConfig readConfig() {
-            SIndicatorConfig out;
-
-            // HyprlandAPI::getConfigValue returns a shared_ptr to the
-            // registered SConfigValue. The plugin registered these in
-            // PLUGIN_INIT (see main.cpp).
-            auto pEnabled = HyprlandAPI::getConfigValue(PHANDLE, "plugin:hyprdictate:indicator_border");
-            auto pColor   = HyprlandAPI::getConfigValue(PHANDLE, "plugin:hyprdictate:indicator_border_color");
-
-            if (pEnabled) {
-                if (auto* bv = dynamic_cast<Config::Values::CBoolValue*>(pEnabled))
-                    out.enabled = bv->value();
-            }
-            if (pColor) {
-                if (auto* cv = dynamic_cast<Config::Values::CColorValue*>(pColor))
-                    out.argb = static_cast<uint64_t>(cv->value());
-            }
-
-            return out;
-        }
-
     }
 
     void Indicator::startRecording(PHLWINDOWREF target) {
-        const auto cfg = readConfig();
+        SIndicatorConfig cfg;
+        if (m_borderEnabled) cfg.enabled = m_borderEnabled->value();
+        if (m_borderColor)   cfg.argb    = static_cast<uint64_t>(m_borderColor->value());
+
         if (!cfg.enabled)
             return;
 
