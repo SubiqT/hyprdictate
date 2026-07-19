@@ -38,3 +38,4 @@ option(HYPRDICTATE_BUILD_PLUGIN "Build the Hyprland compositor plugin" OFF)
 include(cmake/deps.cmake)
 
 add_subdirectory(shared)
+add_subdirectory(daemon)
