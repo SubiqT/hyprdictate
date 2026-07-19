@@ -43,15 +43,12 @@ namespace hyprdictate {
         }
 
         // Called when the connection ends (EOF, error, or shutdown).
-        // If this connection had identified as a plugin, decrement
-        // the server's plugin count so the daemon's wtype fallback
-        // wakes back up.
+        // Logs the plugin-role teardown as a diagnostic so operators
+        // can trace churn against injection behaviour, though wtype
+        // routing itself is now driven by Session per-recording.
         void onClosed() {
             if (m_isPlugin) {
-                const int now = m_server.m_pluginCount.fetch_sub(1, std::memory_order_acq_rel) - 1;
-                spdlog::info("ipc: plugin disconnected ({} plugin connection(s) remaining, "
-                             "wtype {})",
-                             now, now == 0 ? "re-enabled" : "still suppressed");
+                spdlog::info("ipc: plugin disconnected");
                 m_isPlugin = false;
             }
         }
@@ -88,17 +85,16 @@ namespace hyprdictate {
                 try {
                     auto cmd = parseCommand(line);
 
-                    // Intercept Identify: update this connection's
-                    // role and the server's plugin-count. Session
-                    // still sees the command below for logging.
+                    // Log the plugin's identify handshake exactly
+                    // once per connection lifetime as a diagnostic;
+                    // Session already logs the raw identify separately
+                    // via handleIdentify. Injection routing no longer
+                    // depends on this — Session decides per-recording
+                    // based on the presence of a window context.
                     if (const auto* id = std::get_if<command::Identify>(&cmd)) {
                         if (id->role == "plugin" && !m_isPlugin) {
                             m_isPlugin = true;
-                            const int now = m_server.m_pluginCount.fetch_add(1,
-                                std::memory_order_acq_rel) + 1;
-                            spdlog::info("ipc: plugin identified ({} plugin "
-                                         "connection(s), wtype suppressed)",
-                                         now);
+                            spdlog::info("ipc: plugin identified on this connection");
                         }
                     }
 

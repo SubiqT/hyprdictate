@@ -151,19 +151,13 @@ int main(int argc, char** argv) {
         // Session launched for transcription, so a slow wtype exec
         // does not block the IPC loop.
         //
-        // Suppressed while any client has identified as role="plugin"
-        // (M2.8): the plugin owns deterministic-target injection via
-        // wlr_virtual_keyboard_v1 and the daemon must not double-type.
-        // The gate flips back on when the plugin disconnects (e.g.
-        // `hyprctl reload`) so a broken plugin session doesn't leave
-        // the user without dictation.
-        [&injector, &ipc](const std::string&                                  text,
-                          const std::optional<hyprdictate::WindowContext>&    window) {
-            if (ipc && ipc->pluginConnectionCount() > 0) {
-                spdlog::info("wtype suppressed: {} plugin connection(s) own injection",
-                             ipc->pluginConnectionCount());
-                return;
-            }
+        // The suppression decision (skip wtype when a client owns
+        // injection) lives inside Session::completeTranscription
+        // and is gated per-recording rather than per-connection. By
+        // the time this lambda is called, the daemon has already
+        // decided this recording needs wtype.
+        [&injector](const std::string&                                  text,
+                    const std::optional<hyprdictate::WindowContext>&    window) {
             injector.inject(text, window);
         },
         // Initial-prompt supplier: layer 1 (global vocabulary) only
