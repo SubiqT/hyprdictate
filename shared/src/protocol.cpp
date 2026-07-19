@@ -98,7 +98,9 @@ namespace hyprdictate {
         }, e);
     }
 
-    Command parseCommand(const json& j) {
+    namespace {
+
+    Command parseCommandJson(const json& j) {
         if (!j.is_object())
             throw ProtocolError("command payload must be a JSON object");
         if (!j.contains("cmd") || !j["cmd"].is_string())
@@ -123,13 +125,13 @@ namespace hyprdictate {
             // json::parse takes an iterator range, avoiding a string
             // copy over the wire payload. string_view over an in-place
             // socket buffer therefore doesn't need to be materialised.
-            return parseCommand(json::parse(line.begin(), line.end()));
+            return parseCommandJson(json::parse(line.begin(), line.end()));
         } catch (const json::parse_error& e) {
             throw ProtocolError(std::string{"json parse error: "} + e.what());
         }
     }
 
-    Event parseEvent(const json& j) {
+    Event parseEventJson(const json& j) {
         if (!j.is_object())
             throw ProtocolError("event payload must be a JSON object");
         if (!j.contains("event") || !j["event"].is_string())
@@ -171,9 +173,11 @@ namespace hyprdictate {
         throw ProtocolError("unknown event: " + ev);
     }
 
+    } // namespace
+
     Event parseEvent(std::string_view line) {
         try {
-            return parseEvent(json::parse(line.begin(), line.end()));
+            return parseEventJson(json::parse(line.begin(), line.end()));
         } catch (const json::parse_error& e) {
             throw ProtocolError(std::string{"json parse error: "} + e.what());
         }

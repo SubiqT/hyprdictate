@@ -92,9 +92,12 @@ namespace hyprdictate {
     nlohmann::json serialize(const Command& c);
     nlohmann::json serialize(const Event& e);
 
-    Command parseCommand(const nlohmann::json& j);
+    // Parse a wire message from a line of JSON text. The json-taking
+    // overloads that used to live here were removed to eliminate an
+    // overload-resolution ambiguity when callers pass std::string
+    // (which converts to both string_view and nlohmann::json). The
+    // json path stays TU-local inside protocol.cpp.
     Command parseCommand(std::string_view line);
-    Event   parseEvent(const nlohmann::json& j);
     Event   parseEvent(std::string_view line);
 
 }
