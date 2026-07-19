@@ -10,14 +10,16 @@
 
 namespace hyprdictate {
 
-    Session::Session(AudioCapture&  audio,
-                     WhisperEngine& whisper,
-                     EventEmitter   emitter,
-                     Injector       injector)
+    Session::Session(AudioCapture&    audio,
+                     WhisperEngine&   whisper,
+                     EventEmitter     emitter,
+                     Injector         injector,
+                     PromptSupplier   promptSupplier)
         : m_audio(audio)
         , m_whisper(whisper)
         , m_emitter(std::move(emitter))
         , m_injector(std::move(injector))
+        , m_promptSupplier(std::move(promptSupplier))
     {}
 
     Session::~Session() = default;
@@ -159,15 +161,23 @@ namespace hyprdictate {
     void Session::startTranscription(std::vector<float> pcm) {
         emitStateEvent();  // Transcribing
 
+        // Compose the initial_prompt on the current thread so the
+        // supplier sees the same m_window value the caller just
+        // captured. Passing an owned std::string into the worker
+        // lambda avoids lifetime issues with the config's storage.
+        std::string prompt;
+        if (m_promptSupplier)
+            prompt = m_promptSupplier(m_window);
+
         // Launch a detached worker per utterance. Whisper inference
         // is CPU-heavy (hundreds of milliseconds even for short
         // clips) and running it on the IPC thread would freeze
         // incoming state queries. A per-call thread is fine because
         // toggle-flow has one utterance in flight at a time, gated by
         // the state machine.
-        std::thread([this, pcm = std::move(pcm)]() mutable {
+        std::thread([this, pcm = std::move(pcm), prompt = std::move(prompt)]() mutable {
             try {
-                auto text = m_whisper.transcribe(pcm);
+                auto text = m_whisper.transcribe(pcm, prompt);
                 completeTranscription(std::move(text));
             } catch (const std::exception& e) {
                 failTranscription(std::string{"whisper: "} + e.what());

@@ -28,6 +28,7 @@
 #include "ipc.hpp"
 #include "log.hpp"
 #include "session.hpp"
+#include "vocabulary.hpp"
 #include "whisper_engine.hpp"
 
 namespace {
@@ -152,6 +153,12 @@ int main(int argc, char** argv) {
         [&injector](const std::string&                                  text,
                     const std::optional<hyprdictate::WindowContext>&    window) {
             injector.inject(text, window);
+        },
+        // Initial-prompt supplier: layer 1 (global vocabulary) only
+        // for M1. Layers 2 and 3 (per-class and title-token) plug in
+        // through the same callback signature in M4.
+        [&config](const std::optional<hyprdictate::WindowContext>& window) {
+            return hyprdictate::composePrompt(config.vocabulary, window);
         });
 
     const std::filesystem::path socket_path =

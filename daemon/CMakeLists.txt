@@ -35,6 +35,7 @@ add_executable(hyprdictated
     src/session.cpp
     src/ipc.cpp
     src/inject.cpp
+    src/vocabulary.cpp
 )
 
 target_include_directories(hyprdictated PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)

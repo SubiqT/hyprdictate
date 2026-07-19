@@ -34,16 +34,21 @@ namespace hyprdictate {
     public:
         using EventEmitter = std::function<void(const Event&)>;
         using Injector    = std::function<void(const std::string&, const std::optional<WindowContext>&)>;
+        using PromptSupplier = std::function<std::string(const std::optional<WindowContext>&)>;
 
         // audio and whisper are borrowed; the caller (main.cpp) owns
         // their lifetime and outlives Session. emitter is invoked
         // whenever the session broadcasts an event (state change,
         // transcript, error); injector receives the final transcript
-        // and the recording's start-time window context.
-        Session(AudioCapture&  audio,
-                WhisperEngine& whisper,
-                EventEmitter   emitter,
-                Injector       injector);
+        // and the recording's start-time window context; promptSupplier
+        // produces the initial_prompt used for the utterance based on
+        // the same window context (typically pulls from the config's
+        // vocabulary section).
+        Session(AudioCapture&    audio,
+                WhisperEngine&   whisper,
+                EventEmitter     emitter,
+                Injector         injector,
+                PromptSupplier   promptSupplier);
         ~Session();
 
         Session(const Session&)            = delete;
@@ -80,6 +85,7 @@ namespace hyprdictate {
         WhisperEngine& m_whisper;
         EventEmitter   m_emitter;
         Injector       m_injector;
+        PromptSupplier m_promptSupplier;
 
         mutable std::mutex m_mutex;
         std::atomic<State> m_state{State::Idle};
