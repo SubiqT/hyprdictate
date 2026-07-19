@@ -19,26 +19,6 @@ include(FetchContent)
 
 set(FETCHCONTENT_QUIET OFF)
 
-# --- CLI11 (daemon + CLI) ---
-#
-# CLI11 is single-header; find_package resolves the standard
-# `CLI11::CLI11` target when nixpkgs' cli11 is on the prefix path.
-# FetchContent falls back to a git tag rather than vendoring the
-# header so bumping the pin stays a one-line change here.
-if(HYPRDICTATE_BUILD_DAEMON OR HYPRDICTATE_BUILD_CLI)
-    find_package(CLI11 2.4 QUIET CONFIG)
-    if(NOT CLI11_FOUND)
-        message(STATUS "hyprdictate: CLI11 not found, fetching")
-        FetchContent_Declare(
-            hyprdictate_cli11
-            GIT_REPOSITORY https://github.com/CLIUtils/CLI11.git
-            GIT_TAG        v2.4.2
-            GIT_SHALLOW    TRUE
-        )
-        FetchContent_MakeAvailable(hyprdictate_cli11)
-    endif()
-endif()
-
 # --- asio (standalone, daemon only until M2.2) ---
 #
 # asio doesn't install a CMake config; we look for the header on the

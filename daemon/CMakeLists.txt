@@ -55,6 +55,27 @@ if(NOT spdlog_FOUND)
     FetchContent_MakeAvailable(hyprdictate_spdlog)
 endif()
 
+# --- CLI11 ---
+#
+# CLI11 is single-header; find_package resolves the standard
+# CLI11::CLI11 target when nixpkgs' cli11 is on the prefix path.
+# FetchContent falls back to a git tag rather than vendoring the
+# header so bumping the pin stays a one-line change. cli/ resolves
+# CLI11 independently so a component-restricted CLI-only build
+# doesn't pull daemon-side deps.
+find_package(CLI11 2.4 QUIET CONFIG)
+if(NOT CLI11_FOUND)
+    include(FetchContent)
+    message(STATUS "hyprdictate/daemon: CLI11 not found, fetching")
+    FetchContent_Declare(
+        hyprdictate_cli11
+        GIT_REPOSITORY https://github.com/CLIUtils/CLI11.git
+        GIT_TAG        v2.4.2
+        GIT_SHALLOW    TRUE
+    )
+    FetchContent_MakeAvailable(hyprdictate_cli11)
+endif()
+
 pkg_check_modules(PIPEWIRE REQUIRED IMPORTED_TARGET libpipewire-0.3)
 
 find_package(whisper QUIET CONFIG)
