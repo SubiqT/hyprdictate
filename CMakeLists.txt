@@ -40,8 +40,10 @@ option(HYPRDICTATE_BUILD_CLI    "Build the hyprdictate CLI client"    ON)
 option(HYPRDICTATE_BUILD_PLUGIN "Build the Hyprland compositor plugin" OFF)
 
 # shared/ is always built: daemon, CLI, and plugin all link it. It's
-# a small static archive so the always-on cost is negligible.
-include(cmake/deps.cmake)
+# a small static archive so the always-on cost is negligible. Every
+# third-party dep resolution lives with the target that links it
+# (see the individual CMakeLists.txt files); the top level here has
+# no per-dep responsibility beyond enumerating subdirectories.
 add_subdirectory(shared)
 
 if(HYPRDICTATE_BUILD_DAEMON)
