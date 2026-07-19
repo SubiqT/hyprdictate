@@ -9,6 +9,7 @@
 // connection. Broadcasts are safe from any thread; the server posts
 // each write onto its io_context so socket I/O stays serialised.
 
+#include <atomic>
 #include <filesystem>
 #include <list>
 #include <memory>
@@ -46,6 +47,16 @@ namespace hyprdictate {
         // from any thread (posts onto m_io).
         void broadcast(const Event& e);
 
+        // Number of currently-connected clients that have identified
+        // as role="plugin". Used by main() to gate the daemon's
+        // wtype fallback: while a plugin is connected, the plugin
+        // owns injection via its wlr_virtual_keyboard_v1 path and
+        // the daemon must not double-inject. Safe to call from any
+        // thread; the counter is atomic.
+        int pluginConnectionCount() const noexcept {
+            return m_pluginCount.load(std::memory_order_acquire);
+        }
+
     private:
         struct Connection;
 
@@ -63,6 +74,12 @@ namespace hyprdictate {
         // reads the list so the reader always runs on the io thread.
         std::mutex                                     m_mutex;
         std::list<std::shared_ptr<Connection>>         m_connections;
+
+        // Count of connections that have identified as role="plugin".
+        // Written from the io thread when Identify arrives or a
+        // plugin-role connection disconnects; read lock-free by
+        // pluginConnectionCount() from any thread.
+        std::atomic<int>                               m_pluginCount{0};
     };
 
 }

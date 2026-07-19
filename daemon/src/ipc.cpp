@@ -42,6 +42,20 @@ namespace hyprdictate {
                 doWrite();
         }
 
+        // Called when the connection ends (EOF, error, or shutdown).
+        // If this connection had identified as a plugin, decrement
+        // the server's plugin count so the daemon's wtype fallback
+        // wakes back up.
+        void onClosed() {
+            if (m_isPlugin) {
+                const int now = m_server.m_pluginCount.fetch_sub(1, std::memory_order_acq_rel) - 1;
+                spdlog::info("ipc: plugin disconnected ({} plugin connection(s) remaining, "
+                             "wtype {})",
+                             now, now == 0 ? "re-enabled" : "still suppressed");
+                m_isPlugin = false;
+            }
+        }
+
     private:
         void readNextLine() {
             auto self = shared_from_this();
@@ -49,6 +63,7 @@ namespace hyprdictate {
                 [self](const std::error_code& ec, std::size_t bytes) {
                     if (ec) {
                         // EOF or peer close: drop the connection.
+                        self->onClosed();
                         self->m_server.removeConnection(self);
                         return;
                     }
@@ -72,6 +87,21 @@ namespace hyprdictate {
             if (!line.empty()) {
                 try {
                     auto cmd = parseCommand(line);
+
+                    // Intercept Identify: update this connection's
+                    // role and the server's plugin-count. Session
+                    // still sees the command below for logging.
+                    if (const auto* id = std::get_if<command::Identify>(&cmd)) {
+                        if (id->role == "plugin" && !m_isPlugin) {
+                            m_isPlugin = true;
+                            const int now = m_server.m_pluginCount.fetch_add(1,
+                                std::memory_order_acq_rel) + 1;
+                            spdlog::info("ipc: plugin identified ({} plugin "
+                                         "connection(s), wtype suppressed)",
+                                         now);
+                        }
+                    }
+
                     if (auto reply = m_server.m_session.handle(cmd); reply)
                         send(*reply);
                 } catch (const ProtocolError& e) {
@@ -93,6 +123,7 @@ namespace hyprdictate {
             asio::async_write(m_socket, asio::buffer(m_outbox.front()),
                 [self](const std::error_code& ec, std::size_t /*bytes*/) {
                     if (ec) {
+                        self->onClosed();
                         self->m_server.removeConnection(self);
                         return;
                     }
@@ -105,6 +136,11 @@ namespace hyprdictate {
         unix_socket::socket     m_socket;
         asio::streambuf         m_readbuf;
         std::list<std::string>  m_outbox;
+
+        // Set true when this connection has identified as
+        // role="plugin". Read only from the io thread (Connection
+        // callbacks all run there), so no atomicity needed.
+        bool                    m_isPlugin = false;
     };
 
     IpcServer::IpcServer(asio::io_context&     io,
@@ -154,8 +190,10 @@ namespace hyprdictate {
             std::lock_guard<std::mutex> guard(m_mutex);
             conns.swap(m_connections);
         }
-        for (auto& c : conns)
+        for (auto& c : conns) {
+            c->onClosed();
             c->close();
+        }
 
         fs::remove(m_socketPath, ec);
     }
