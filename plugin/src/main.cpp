@@ -16,9 +16,21 @@
 namespace {
 
     void onDaemonState(hyprdictate::State s) {
+        hyprdictate::g_plugin.daemonState = s;
+
+        // Clear the captured window on any terminal transition so a
+        // stale PHLWINDOWREF doesn't drift into the next recording.
+        // The Recording→Transcribing edge keeps it, since M2.5's
+        // injector still needs to type into the same window when
+        // the transcript arrives.
+        if (s == hyprdictate::State::Idle ||
+            s == hyprdictate::State::Error ||
+            s == hyprdictate::State::Cancelled) {
+            hyprdictate::g_plugin.targetWindow.reset();
+        }
+
         // M2.7 fans this out onto Hyprland's socket2 so the M3 widget
-        // can subscribe. M2.5 also hooks into recording transitions
-        // to snapshot the target window. For this commit, just log.
+        // can subscribe.
         hyprdictate::log::info("daemon state = {}",
                                hyprdictate::formatState(s));
     }

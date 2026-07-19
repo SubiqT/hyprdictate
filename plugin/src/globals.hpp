@@ -2,8 +2,10 @@
 
 #include <memory>
 
+#include <hyprland/src/desktop/DesktopTypes.hpp>
 #include <hyprland/src/plugins/PluginAPI.hpp>
 
+#include "hyprdictate/state.hpp"
 #include "socket_client.hpp"
 
 // PHANDLE is the handle Hyprland gives us at PLUGIN_INIT. Required
@@ -17,12 +19,27 @@ namespace hyprdictate {
     // Members are constructed at PLUGIN_INIT time by main.cpp and
     // destroyed at PLUGIN_EXIT so their lifetime brackets every
     // callback fired on Hyprland's event loop.
+    //
+    // Everything here is single-threaded: every touch happens on the
+    // compositor's main thread (dispatcher fires, socket_client
+    // callbacks fired by wl_event_loop). No mutexes required.
     struct SPluginState {
         // Socket client to the daemon. Nullable: a plugin loaded
         // before the daemon starts still comes up, dispatchers just
-        // surface the disconnect. See socket_client.hpp for the
-        // reconnect story.
+        // surface the disconnect.
         std::unique_ptr<SocketClient> socket;
+
+        // Mirror of the daemon's state, updated on every state
+        // event. Local mirror lets dispatchers make edge-vs-level
+        // decisions (toggle → start or stop depending on state)
+        // without a round-trip to the daemon.
+        State daemonState = State::Idle;
+
+        // Weak reference to the window focused at record-start time.
+        // Injection (M2.5) locks this and types into the underlying
+        // surface even if focus has since drifted. Cleared when the
+        // recording completes or cancels.
+        PHLWINDOWREF targetWindow;
     };
 
     inline SPluginState g_plugin = {};

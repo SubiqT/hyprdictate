@@ -1,8 +1,12 @@
 #include "dispatcher.hpp"
 
+#include <optional>
 #include <string>
 #include <string_view>
 
+#include <hyprland/src/desktop/DesktopTypes.hpp>
+#include <hyprland/src/desktop/state/FocusState.hpp>
+#include <hyprland/src/desktop/view/Window.hpp>
 #include <hyprland/src/plugins/PluginAPI.hpp>
 
 extern "C" {
@@ -35,10 +39,6 @@ namespace hyprdictate {
             };
         }
 
-        // Send a command to the daemon and translate the result into
-        // a dispatcher-shaped return. Kept in one helper so every
-        // dispatcher path exits through the same success/error mould
-        // and dispatches don't drift in surface behaviour.
         SDispatchResult sendToDaemon(const Command& cmd, std::string_view label) {
             if (!g_plugin.socket) {
                 return errReply(std::string{label}
@@ -54,16 +54,53 @@ namespace hyprdictate {
             return okReply();
         }
 
+        // Snapshot the currently-focused window into g_plugin.
+        // targetWindow and build a WindowContext for the outgoing
+        // `start` payload. Returns nullopt if there's no focused
+        // window (e.g. an empty workspace); the daemon then falls
+        // back to global vocabulary alone.
+        std::optional<WindowContext> captureFocusedWindow() {
+            const auto focus = Desktop::focusState();
+            if (!focus)
+                return std::nullopt;
+
+            const auto window = focus->window();
+            if (!window) {
+                g_plugin.targetWindow.reset();
+                return std::nullopt;
+            }
+
+            g_plugin.targetWindow = window;
+
+            return WindowContext{
+                .cls   = window->m_class,
+                .title = window->m_title,
+            };
+        }
+
+        // Toggle is the CLI-shaped edge action; the plugin maps it
+        // onto the daemon's level-triggered start/stop pair based on
+        // the locally-mirrored state so start payloads always carry
+        // a window context. If we sent bare `toggle` the daemon
+        // couldn't attach class/title to the vocabulary.
         SDispatchResult dispatchToggle(std::string /*args*/) {
-            // Window context is populated in M2.4 (focused surface
-            // capture on the recording-start transition). For M2.3
-            // we hand the daemon an empty toggle and it composes
-            // vocabulary from globals alone.
-            return sendToDaemon(command::Toggle{}, "toggle");
+            if (g_plugin.daemonState == State::Recording) {
+                return sendToDaemon(command::Stop{}, "toggle→stop");
+            }
+            if (g_plugin.daemonState != State::Idle) {
+                // Transcribing / Error / Cancelled: forward as toggle
+                // and let the daemon's handleToggle decide (it drops
+                // it as a no-op). Keeps the dispatcher symmetric.
+                return sendToDaemon(command::Toggle{}, "toggle");
+            }
+
+            const auto window = captureFocusedWindow();
+            return sendToDaemon(command::Start{ .window = window }, "toggle→start");
         }
 
         SDispatchResult dispatchPttDown(std::string /*args*/) {
-            return sendToDaemon(command::PttDown{}, "ptt_down");
+            const auto window = captureFocusedWindow();
+            return sendToDaemon(command::PttDown{ .window = window }, "ptt_down");
         }
 
         SDispatchResult dispatchPttUp(std::string /*args*/) {
@@ -71,6 +108,7 @@ namespace hyprdictate {
         }
 
         SDispatchResult dispatchCancel(std::string /*args*/) {
+            g_plugin.targetWindow.reset();
             return sendToDaemon(command::Cancel{}, "cancel");
         }
 
@@ -84,9 +122,7 @@ namespace hyprdictate {
         // Return contract (hyprwsmode's precedent): the Lua thunk
         // performs its side effect and pushes hl.dsp.no_op() as a
         // valid dispatcher table so hl.bind callbacks have something
-        // to invoke. Without this the action fires but the bind
-        // silently no-ops on subsequent presses.
-
+        // to invoke.
         void pushNoOp(lua_State* L) {
             lua_getglobal(L, "hl");
             if (!lua_istable(L, -1)) {
@@ -147,17 +183,11 @@ namespace hyprdictate {
     }  // namespace
 
     void registerDispatchers() {
-        // Classic addDispatcherV2 registrations. Bind with:
-        //   bind = SUPER, H, hyprdictate, toggle
         HyprlandAPI::addDispatcherV2(PHANDLE, "hyprdictate:toggle",   &dispatchToggle);
         HyprlandAPI::addDispatcherV2(PHANDLE, "hyprdictate:ptt_down", &dispatchPttDown);
         HyprlandAPI::addDispatcherV2(PHANDLE, "hyprdictate:ptt_up",   &dispatchPttUp);
         HyprlandAPI::addDispatcherV2(PHANDLE, "hyprdictate:cancel",   &dispatchCancel);
 
-        // Lua namespace: hl.plugin.hyprdictate.<fn>. Registered per
-        // subcommand rather than as a single dispatcher-string so
-        // typos in Lua fail loudly at call time instead of silently
-        // reaching an unknown-command branch.
         struct SLuaBinding {
             const char*    name;
             PLUGIN_LUA_FN  fn;
