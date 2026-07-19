@@ -1,12 +1,14 @@
 // hyprdictated — voice dictation daemon for Hyprland.
 //
-// This is the M1 skeleton: parses CLI arguments, initialises logging,
-// loads the config, and exits cleanly. Later commits in the M1 series
-// layer on whisper.cpp model loading, PipeWire audio capture, the
-// unix-socket IPC server, and text injection.
+// Wires:
+//   config      — TOML at $XDG_CONFIG_HOME/hyprdictate/config.toml
+//   whisper     — resident model loaded on startup
+//   audio       — PipeWire capture into an in-memory buffer
+//   session     — state machine over the wire commands
+//   ipc         — asio unix-socket server carrying Commands and Events
 //
-// Rationale for the layered approach lives in the individual feature
-// commits' messages; this file's job is to be the wiring diagram.
+// Text injection lands in the next commit; for this milestone the
+// transcript flows out over the socket only.
 
 #include <cstdlib>
 #include <exception>
@@ -17,16 +19,29 @@
 #include <string>
 
 #include <CLI/CLI.hpp>
+#include <asio.hpp>
 #include <spdlog/spdlog.h>
 
 #include "audio.hpp"
 #include "config.hpp"
+#include "ipc.hpp"
 #include "log.hpp"
+#include "session.hpp"
 #include "whisper_engine.hpp"
 
 namespace {
 
     constexpr const char* kVersion = "0.1";
+
+    // Resolve the daemon's socket path. The design doc places it at
+    // $XDG_RUNTIME_DIR/hyprdictate.sock; if XDG_RUNTIME_DIR isn't set
+    // (unusual outside a real session), fall back to /tmp so the
+    // daemon at least starts and complains via logs.
+    std::filesystem::path defaultSocketPath() {
+        if (const char* xdg = std::getenv("XDG_RUNTIME_DIR"); xdg && *xdg)
+            return std::filesystem::path{xdg} / "hyprdictate.sock";
+        return std::filesystem::path{"/tmp"} / "hyprdictate.sock";
+    }
 
 }
 
@@ -40,11 +55,14 @@ int main(int argc, char** argv) {
                    "Path to config.toml "
                    "(default: $XDG_CONFIG_HOME/hyprdictate/config.toml)");
 
+    std::string socket_arg;
+    app.add_option("-s,--socket", socket_arg,
+                   "Path to the daemon's unix socket "
+                   "(default: $XDG_RUNTIME_DIR/hyprdictate.sock)");
+
     bool show_version = false;
     app.add_flag("--version", show_version, "Print version and exit");
 
-    // CLI11_PARSE prints its own error messages and returns a non-zero
-    // exit code on argv parse failure; nothing to do in that branch.
     CLI11_PARSE(app, argc, argv);
 
     if (show_version) {
@@ -69,18 +87,12 @@ int main(int argc, char** argv) {
     }
 
     spdlog::info("hyprdictated {} starting", kVersion);
-    spdlog::info("config loaded from {}", resolved.string());
+    spdlog::info("config     = {}", resolved.string());
     spdlog::info("model_path = {}", config.model_path.string());
     spdlog::info("language   = {}", config.language);
-    spdlog::info("threads    = {} ({})",
-                 config.threads,
-                 config.threads == 0 ? "auto" : "explicit");
 
-    // Load the whisper model up front. Failing here (missing model
-    // file, unrecognised format) is fatal for the daemon: without an
-    // engine there is nothing useful to run. This matches the design
-    // doc's "Load whisper model at startup, keep it resident" line
-    // and gives the systemd unit a clean signal to restart against.
+    // Load the whisper model up front. Failing here is fatal for the
+    // daemon: without an engine there's nothing useful to run.
     std::unique_ptr<hyprdictate::WhisperEngine> engine;
     try {
         engine = std::make_unique<hyprdictate::WhisperEngine>(
@@ -111,9 +123,64 @@ int main(int argc, char** argv) {
         return 4;
     }
 
-    // M1 skeleton exit: later commits install the IPC server and
-    // toggle state machine here, then block until a signal handler
-    // flips the shutdown flag.
-    spdlog::info("audio + model resident; runtime wiring lands in later commits");
+    // The daemon's event loop is a single-threaded asio io_context.
+    // All socket I/O and command dispatch runs on this thread; the
+    // only off-thread work is the PipeWire process callback (on its
+    // own thread_loop) and per-utterance whisper worker threads
+    // launched from Session::startTranscription. Both hand back to
+    // the io_context via asio::post before touching connection state.
+    asio::io_context io;
+
+    // The IPC server is constructed before the Session so the Session
+    // can capture a pointer to it in its emitter lambda; the pointer
+    // is dereferenced only after start(), so use before initialisation
+    // isn't a hazard here.
+    std::unique_ptr<hyprdictate::IpcServer> ipc;
+
+    hyprdictate::Session session(
+        *audio,
+        *engine,
+        [&ipc](const hyprdictate::Event& e) {
+            if (ipc) ipc->broadcast(e);
+        },
+        // Injector: wired in the next commit. For now, log the
+        // transcript so the flow is observable end-to-end.
+        [](const std::string& text,
+           const std::optional<hyprdictate::WindowContext>& /*window*/) {
+            spdlog::info("transcript ready ({} chars): {}", text.size(), text);
+        });
+
+    const std::filesystem::path socket_path =
+        !socket_arg.empty() ? std::filesystem::path{socket_arg}
+                            : defaultSocketPath();
+
+    try {
+        ipc = std::make_unique<hyprdictate::IpcServer>(io, socket_path, session);
+        ipc->start();
+    } catch (const std::exception& e) {
+        spdlog::error("ipc server failed to start on {}: {}",
+                      socket_path.string(), e.what());
+        return 5;
+    }
+
+    // Graceful shutdown on SIGINT/SIGTERM: cancel any in-flight
+    // accept and let io.run() unwind. asio::signal_set is a
+    // cross-platform wrapper over sigaction/sigprocmask.
+    asio::signal_set signals(io, SIGINT, SIGTERM);
+    signals.async_wait([&](const std::error_code&, int signo) {
+        spdlog::info("received signal {}, shutting down", signo);
+        ipc->stop();
+        io.stop();
+    });
+
+    spdlog::info("daemon ready");
+    try {
+        io.run();
+    } catch (const std::exception& e) {
+        spdlog::error("event loop terminated: {}", e.what());
+        return 6;
+    }
+
+    spdlog::info("daemon exited cleanly");
     return 0;
 }
