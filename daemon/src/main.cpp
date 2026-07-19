@@ -12,6 +12,7 @@
 #include <exception>
 #include <filesystem>
 #include <iostream>
+#include <memory>
 #include <optional>
 #include <string>
 
@@ -20,6 +21,7 @@
 
 #include "config.hpp"
 #include "log.hpp"
+#include "whisper_engine.hpp"
 
 namespace {
 
@@ -73,9 +75,29 @@ int main(int argc, char** argv) {
                  config.threads,
                  config.threads == 0 ? "auto" : "explicit");
 
-    // M1 skeleton exit: later commits install the whisper engine,
-    // audio thread, IPC server, and the toggle state machine here,
-    // then block until a signal handler flips the shutdown flag.
-    spdlog::info("skeleton run complete; runtime wiring lands in later commits");
+    // Load the whisper model up front. Failing here (missing model
+    // file, unrecognised format) is fatal for the daemon: without an
+    // engine there is nothing useful to run. This matches the design
+    // doc's "Load whisper model at startup, keep it resident" line
+    // and gives the systemd unit a clean signal to restart against.
+    std::unique_ptr<hyprdictate::WhisperEngine> engine;
+    try {
+        engine = std::make_unique<hyprdictate::WhisperEngine>(
+            config.model_path,
+            config.whisper,
+            config.language,
+            config.threads);
+    } catch (const hyprdictate::WhisperError& e) {
+        spdlog::error("whisper engine failed to load: {}", e.what());
+        return 3;
+    } catch (const std::exception& e) {
+        spdlog::error("unexpected error initialising whisper: {}", e.what());
+        return 3;
+    }
+
+    // M1 skeleton exit: later commits install the audio thread, IPC
+    // server, and toggle state machine here, then block until a
+    // signal handler flips the shutdown flag.
+    spdlog::info("model resident; runtime wiring lands in later commits");
     return 0;
 }
