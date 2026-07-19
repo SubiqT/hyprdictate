@@ -81,49 +81,54 @@ if(HYPRDICTATE_BUILD_DAEMON)
     endif()
 endif()
 
-# --- CLI11 ---
+# --- CLI11 (daemon + CLI) ---
 #
 # CLI11 is single-header; find_package resolves the standard
 # `CLI11::CLI11` target when nixpkgs' cli11 is on the prefix path.
 # FetchContent falls back to a git tag rather than vendoring the
 # header so bumping the pin stays a one-line change here.
-find_package(CLI11 2.4 QUIET CONFIG)
-if(NOT CLI11_FOUND)
-    message(STATUS "hyprdictate: CLI11 not found, fetching")
-    FetchContent_Declare(
-        hyprdictate_cli11
-        GIT_REPOSITORY https://github.com/CLIUtils/CLI11.git
-        GIT_TAG        v2.4.2
-        GIT_SHALLOW    TRUE
-    )
-    FetchContent_MakeAvailable(hyprdictate_cli11)
+if(HYPRDICTATE_BUILD_DAEMON OR HYPRDICTATE_BUILD_CLI)
+    find_package(CLI11 2.4 QUIET CONFIG)
+    if(NOT CLI11_FOUND)
+        message(STATUS "hyprdictate: CLI11 not found, fetching")
+        FetchContent_Declare(
+            hyprdictate_cli11
+            GIT_REPOSITORY https://github.com/CLIUtils/CLI11.git
+            GIT_TAG        v2.4.2
+            GIT_SHALLOW    TRUE
+        )
+        FetchContent_MakeAvailable(hyprdictate_cli11)
+    endif()
 endif()
 
-# --- asio (standalone) ---
+# --- asio (standalone, daemon + plugin) ---
 #
 # asio doesn't install a CMake config; we look for the header on the
 # include path (nixpkgs' `asio` package places asio.hpp there directly)
 # and wrap it as an INTERFACE target so downstream code depends on
 # `hyprdictate::asio` regardless of source. ASIO_STANDALONE selects
 # the Boost-free build; ASIO_NO_DEPRECATED trims the legacy handler
-# APIs that trip newer C++ conformance modes.
-find_path(HYPRDICTATE_ASIO_INCLUDE_DIR asio.hpp)
-if(NOT HYPRDICTATE_ASIO_INCLUDE_DIR)
-    message(STATUS "hyprdictate: asio.hpp not found, fetching")
-    FetchContent_Declare(
-        hyprdictate_asio
-        GIT_REPOSITORY https://github.com/chriskohlhoff/asio.git
-        GIT_TAG        asio-1-30-2
-        GIT_SHALLOW    TRUE
-    )
-    FetchContent_MakeAvailable(hyprdictate_asio)
-    set(HYPRDICTATE_ASIO_INCLUDE_DIR ${hyprdictate_asio_SOURCE_DIR}/asio/include)
-endif()
+# APIs that trip newer C++ conformance modes. Currently the daemon
+# links this; the plugin joins in M2.2 for its own socket client.
+if(HYPRDICTATE_BUILD_DAEMON OR HYPRDICTATE_BUILD_PLUGIN)
+    find_path(HYPRDICTATE_ASIO_INCLUDE_DIR asio.hpp)
+    if(NOT HYPRDICTATE_ASIO_INCLUDE_DIR)
+        message(STATUS "hyprdictate: asio.hpp not found, fetching")
+        FetchContent_Declare(
+            hyprdictate_asio
+            GIT_REPOSITORY https://github.com/chriskohlhoff/asio.git
+            GIT_TAG        asio-1-30-2
+            GIT_SHALLOW    TRUE
+        )
+        FetchContent_MakeAvailable(hyprdictate_asio)
+        set(HYPRDICTATE_ASIO_INCLUDE_DIR ${hyprdictate_asio_SOURCE_DIR}/asio/include)
+    endif()
 
-add_library(hyprdictate_asio INTERFACE)
-target_include_directories(hyprdictate_asio SYSTEM INTERFACE ${HYPRDICTATE_ASIO_INCLUDE_DIR})
-target_compile_definitions(hyprdictate_asio INTERFACE
-    ASIO_STANDALONE=1
-    ASIO_NO_DEPRECATED=1
-)
-add_library(hyprdictate::asio ALIAS hyprdictate_asio)
+    add_library(hyprdictate_asio INTERFACE)
+    target_include_directories(hyprdictate_asio SYSTEM INTERFACE ${HYPRDICTATE_ASIO_INCLUDE_DIR})
+    target_compile_definitions(hyprdictate_asio INTERFACE
+        ASIO_STANDALONE=1
+        ASIO_NO_DEPRECATED=1
+    )
+    add_library(hyprdictate::asio ALIAS hyprdictate_asio)
+endif()
