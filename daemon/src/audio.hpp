@@ -68,10 +68,9 @@ namespace hyprdictate {
     private:
         // Trampolines and the SPA event tables live entirely in the
         // .cpp file so this header stays free of PipeWire types.
-        // These friend declarations let those file-local statics
-        // reach the private members below.
+        // This friend declaration lets the file-local process
+        // trampoline reach the private members below.
         friend void audio_on_process_impl(class AudioCapture&) noexcept;
-        friend void audio_on_state_changed_impl(class AudioCapture&) noexcept;
 
         void tearDownStreamLocked();
 

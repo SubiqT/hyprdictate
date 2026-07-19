@@ -97,12 +97,6 @@ namespace hyprdictate {
         pw_stream_queue_buffer(self.m_stream, b);
     }
 
-    void audio_on_state_changed_impl(AudioCapture& /*self*/) noexcept {
-        // Reserved for future state-driven bookkeeping (e.g. surfacing
-        // a stream-error to the caller). Kept as a friend hook so the
-        // friend declaration in the header isn't dead.
-    }
-
     AudioCapture::AudioCapture() {
         // pw_init is refcounted internally; calling twice is harmless
         // and lets a future test binary bring the daemon up and down
