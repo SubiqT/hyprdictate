@@ -38,6 +38,10 @@ namespace hyprdictate {
         // Order matters: remove the event source before closing the
         // fd so the compositor doesn't fire onFdReady on a stale fd
         // between the close() and the wl_event_source_remove().
+        if (m_retryTimer) {
+            wl_event_source_remove(m_retryTimer);
+            m_retryTimer = nullptr;
+        }
         if (m_source) {
             wl_event_source_remove(m_source);
             m_source = nullptr;
@@ -54,6 +58,7 @@ namespace hyprdictate {
         const int fd = ::socket(AF_UNIX, SOCK_STREAM, 0);
         if (fd < 0) {
             log::warn("socket_client: socket(): {}", std::strerror(errno));
+            scheduleReconnect();
             return false;
         }
 
@@ -63,14 +68,17 @@ namespace hyprdictate {
         if (path_str.size() >= sizeof(addr.sun_path)) {
             log::warn("socket_client: socket path too long: {}", path_str);
             ::close(fd);
+            // Path length is a config error, not a transient one;
+            // don't schedule a retry — it would just fail identically.
             return false;
         }
         std::memcpy(addr.sun_path, path_str.data(), path_str.size());
 
         if (::connect(fd, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) < 0) {
-            log::warn("socket_client: connect({}): {} (is hyprdictated running?)",
-                      path_str, std::strerror(errno));
+            log::warn("socket_client: connect({}): {} (retrying in {}ms)",
+                      path_str, std::strerror(errno), m_backoffMs);
             ::close(fd);
+            scheduleReconnect();
             return false;
         }
 
@@ -83,6 +91,7 @@ namespace hyprdictate {
         if (!g_pCompositor || !g_pCompositor->m_wlEventLoop) {
             log::warn("socket_client: compositor wl_event_loop not available yet");
             ::close(fd);
+            scheduleReconnect();
             return false;
         }
 
@@ -98,6 +107,7 @@ namespace hyprdictate {
             log::warn("socket_client: wl_event_loop_add_fd failed");
             ::close(m_fd);
             m_fd = -1;
+            scheduleReconnect();
             return false;
         }
 
@@ -112,6 +122,11 @@ namespace hyprdictate {
             log::warn("socket_client: identify write failed; wtype suppression "
                       "may not activate on the daemon side");
         }
+
+        // Successful connect + identify: reset the backoff so a
+        // future disconnect starts retrying from the short end
+        // again.
+        m_backoffMs = kBackoffInitMs;
 
         return true;
     }
@@ -235,6 +250,57 @@ namespace hyprdictate {
 
         if (m_callbacks.onError)
             m_callbacks.onError(std::string{"daemon disconnected: "} + reason);
+
+        scheduleReconnect();
+    }
+
+    int SocketClient::onRetryTimer(void* userdata) {
+        auto* self = static_cast<SocketClient*>(userdata);
+
+        // wl_event_loop timers are single-shot; the source is safe
+        // to drop after firing. Zero it before attempting the
+        // reconnect so a synchronous failure inside connect() can
+        // schedule the next attempt without double-registering the
+        // same timer slot.
+        if (self->m_retryTimer) {
+            wl_event_source_remove(self->m_retryTimer);
+            self->m_retryTimer = nullptr;
+        }
+
+        // Grow the backoff for the next attempt (bounded). connect()
+        // will reset it if this attempt succeeds.
+        const uint32_t next = self->m_backoffMs * 2;
+        self->m_backoffMs = (next > kBackoffMaxMs) ? kBackoffMaxMs : next;
+
+        (void)self->connect();
+        return 0;
+    }
+
+    void SocketClient::scheduleReconnect() {
+        if (!g_pCompositor || !g_pCompositor->m_wlEventLoop) {
+            // No event loop to schedule on. This branch is unusual —
+            // PLUGIN_INIT runs after the compositor is up — but if
+            // hit, subsequent dispatcher calls will keep firing
+            // "daemon not connected" errors until PLUGIN_EXIT.
+            return;
+        }
+
+        // If a retry is already queued, leave it — we don't want
+        // multiple pending retries stacking up.
+        if (m_retryTimer)
+            return;
+
+        m_retryTimer = wl_event_loop_add_timer(
+            g_pCompositor->m_wlEventLoop,
+            &SocketClient::onRetryTimer,
+            this);
+        if (!m_retryTimer) {
+            log::warn("socket_client: wl_event_loop_add_timer failed; no reconnect");
+            return;
+        }
+
+        wl_event_source_timer_update(m_retryTimer, static_cast<int>(m_backoffMs));
+        log::info("socket_client: reconnect scheduled in {}ms", m_backoffMs);
     }
 
 }
