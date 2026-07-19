@@ -59,13 +59,13 @@ if(HYPRDICTATE_BUILD_DAEMON)
     endif()
 endif()
 
-# --- spdlog (daemon + plugin) ---
+# --- spdlog (daemon only) ---
 #
 # 1.13.0 gets us std::format-backed formatters and drops the older
 # fmt-headers-only workaround. spdlog::spdlog remains the canonical
-# target regardless of source. Only needed by the daemon and the
-# plugin; the CLI logs to stderr directly and doesn't link spdlog.
-if(HYPRDICTATE_BUILD_DAEMON OR HYPRDICTATE_BUILD_PLUGIN)
+# target regardless of source. The plugin uses a stderr shim to
+# match hyprwsmode; only the daemon links spdlog.
+if(HYPRDICTATE_BUILD_DAEMON)
     find_package(spdlog 1.12 QUIET CONFIG)
     if(NOT spdlog_FOUND)
         message(STATUS "hyprdictate: spdlog not found, fetching")
