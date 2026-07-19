@@ -1,10 +1,10 @@
 # hyprdictated: the voice-dictation daemon.
 #
-# The daemon's CMakeLists.txt grows through the M1 commit series: each
-# feature commit adds its own source files and pkg-config lookups
-# rather than declaring the full dep graph up front. That keeps
-# individual commits reviewable and each intermediate state buildable
-# on its own.
+# Third-party deps are resolved here rather than at the top level so
+# a component-restricted build (nix build .#cli, .#plugin) doesn't
+# hit find_package calls for libs it will never link. Every dep uses
+# the find_package → FetchContent fallback pattern so Nix and
+# non-Nix consumers both build without network access at build time.
 #
 # Current deps:
 # - CLI11 for arg parsing
@@ -16,6 +16,24 @@
 # - libpipewire-0.3 for audio capture
 
 find_package(PkgConfig REQUIRED)
+
+# --- toml++ ---
+#
+# 3.4.0 is the first release that exposes toml::parse_file with a
+# std::filesystem::path overload, letting the daemon consume the
+# XDG-resolved path directly.
+find_package(tomlplusplus 3.3 QUIET CONFIG)
+if(NOT tomlplusplus_FOUND)
+    include(FetchContent)
+    message(STATUS "hyprdictate/daemon: tomlplusplus not found, fetching")
+    FetchContent_Declare(
+        hyprdictate_tomlplusplus
+        GIT_REPOSITORY https://github.com/marzer/tomlplusplus.git
+        GIT_TAG        v3.4.0
+        GIT_SHALLOW    TRUE
+    )
+    FetchContent_MakeAvailable(hyprdictate_tomlplusplus)
+endif()
 
 pkg_check_modules(PIPEWIRE REQUIRED IMPORTED_TARGET libpipewire-0.3)
 

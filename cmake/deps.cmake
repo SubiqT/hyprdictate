@@ -19,26 +19,6 @@ include(FetchContent)
 
 set(FETCHCONTENT_QUIET OFF)
 
-# --- tomlplusplus (daemon only) ---
-#
-# 3.4.0 is the first release that exposes toml::parse_file with a
-# std::filesystem::path overload, letting the daemon consume the
-# XDG-resolved path directly. Gated by the daemon build option so
-# a CLI-only Nix build doesn't require this dep in its buildInputs.
-if(HYPRDICTATE_BUILD_DAEMON)
-    find_package(tomlplusplus 3.3 QUIET CONFIG)
-    if(NOT tomlplusplus_FOUND)
-        message(STATUS "hyprdictate: tomlplusplus not found, fetching")
-        FetchContent_Declare(
-            hyprdictate_tomlplusplus
-            GIT_REPOSITORY https://github.com/marzer/tomlplusplus.git
-            GIT_TAG        v3.4.0
-            GIT_SHALLOW    TRUE
-        )
-        FetchContent_MakeAvailable(hyprdictate_tomlplusplus)
-    endif()
-endif()
-
 # --- spdlog (daemon only) ---
 #
 # 1.13.0 gets us std::format-backed formatters and drops the older
