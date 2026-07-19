@@ -14,30 +14,10 @@
 # Deps that always come from the system (whisper.cpp, PipeWire,
 # Hyprland) are declared in the target CMakeLists that need them so
 # missing them produces a build error only for the affected target.
-# nlohmann/json is the one dep required at this top level because
-# shared/ links it publicly.
 
 include(FetchContent)
 
 set(FETCHCONTENT_QUIET OFF)
-
-# --- nlohmann/json ---
-#
-# 3.11.3 is the release with the fixes to structured binding decompose
-# that our std::visit-based serializer relies on. Bump only after
-# confirming the wire test still round-trips.
-find_package(nlohmann_json 3.11 QUIET CONFIG)
-if(NOT nlohmann_json_FOUND)
-    message(STATUS "hyprdictate: nlohmann_json not found, fetching")
-    FetchContent_Declare(
-        hyprdictate_json
-        GIT_REPOSITORY https://github.com/nlohmann/json.git
-        GIT_TAG        v3.11.3
-        GIT_SHALLOW    TRUE
-    )
-    set(JSON_BuildTests OFF CACHE INTERNAL "")
-    FetchContent_MakeAvailable(hyprdictate_json)
-endif()
 
 # --- tomlplusplus (daemon only) ---
 #
