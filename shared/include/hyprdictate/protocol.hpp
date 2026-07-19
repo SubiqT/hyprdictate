@@ -47,6 +47,20 @@ namespace hyprdictate {
         // header bump.
         struct PttDown { std::optional<WindowContext> window; };
         struct PttUp   {};
+
+        // Sent by a client immediately after connect to declare its
+        // role. Roles known today:
+        //   "plugin" — the Hyprland compositor plugin (M2). The
+        //              daemon suppresses its own wtype injection
+        //              while at least one plugin identifies (M2.8),
+        //              since the plugin has its own deterministic-
+        //              target injection path.
+        //   "widget" — the Noctalia widget (M3). No behavioural
+        //              impact today; recorded for future per-role
+        //              routing.
+        // Anonymous clients (CLI, ad-hoc `nc -U`) don't send it and
+        // the daemon treats them as generic subscribers.
+        struct Identify { std::string role; };
     }
 
     using Command = std::variant<
@@ -57,7 +71,8 @@ namespace hyprdictate {
         command::Status,
         command::Reload,
         command::PttDown,
-        command::PttUp
+        command::PttUp,
+        command::Identify
     >;
 
     // Events flow from daemon to subscribed clients. StateChanged is

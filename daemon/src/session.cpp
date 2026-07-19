@@ -47,6 +47,8 @@ namespace hyprdictate {
                 return handleStart(c.window);
             } else if constexpr (std::is_same_v<T, command::PttUp>) {
                 return handleStop();
+            } else if constexpr (std::is_same_v<T, command::Identify>) {
+                return handleIdentify(c.role);
             }
         }, cmd);
     }
@@ -154,6 +156,21 @@ namespace hyprdictate {
         return event::Error{
             .message = "reload not implemented yet (arrives in M4)",
         };
+    }
+
+    std::optional<Event> Session::handleIdentify(const std::string& role) {
+        // M2.2 records the identify by logging. M2.8 wires it up to
+        // gate the daemon's wtype fallback so a connected plugin
+        // owns injection and the daemon doesn't double-type.
+        //
+        // The empty-role case falls through as "anonymous"; treating
+        // it as an error would break the CLI which doesn't identify.
+        if (role.empty()) {
+            spdlog::debug("client identify with empty role, treating as anonymous");
+        } else {
+            spdlog::info("client identified as role={}", role);
+        }
+        return std::nullopt;
     }
 
     void Session::startTranscription(std::vector<float> pcm) {

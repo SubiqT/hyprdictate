@@ -63,6 +63,12 @@ namespace hyprdictate {
                 if (x.window) j["window"] = writeWindow(*x.window);
                 return j;
             },
+            [](const command::Identify& x) -> json {
+                return {
+                    {"cmd",  "identify"},
+                    {"role", x.role},
+                };
+            },
         }, c);
     }
 
@@ -116,6 +122,12 @@ namespace hyprdictate {
         if (cmd == "ptt_up")   return command::PttUp{};
         if (cmd == "start")    return command::Start{ .window = readWindow(j) };
         if (cmd == "ptt_down") return command::PttDown{ .window = readWindow(j) };
+        if (cmd == "identify") {
+            std::string role;
+            if (j.contains("role") && j["role"].is_string())
+                role = j["role"].get<std::string>();
+            return command::Identify{ .role = std::move(role) };
+        }
 
         throw ProtocolError("unknown command: " + cmd);
     }

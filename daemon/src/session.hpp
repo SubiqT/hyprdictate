@@ -70,6 +70,7 @@ namespace hyprdictate {
         std::optional<Event> handleCancel();
         std::optional<Event> handleStatus();
         std::optional<Event> handleReload();
+        std::optional<Event> handleIdentify(const std::string& role);
 
         // Kick off whisper on a worker thread with the current PCM
         // and window context. The worker calls completeTranscription
