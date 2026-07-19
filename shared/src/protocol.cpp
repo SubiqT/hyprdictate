@@ -120,6 +120,8 @@ namespace hyprdictate {
         throw ProtocolError("unknown command: " + cmd);
     }
 
+    } // namespace
+
     Command parseCommand(std::string_view line) {
         try {
             // json::parse takes an iterator range, avoiding a string
@@ -130,6 +132,8 @@ namespace hyprdictate {
             throw ProtocolError(std::string{"json parse error: "} + e.what());
         }
     }
+
+    namespace {
 
     Event parseEventJson(const json& j) {
         if (!j.is_object())

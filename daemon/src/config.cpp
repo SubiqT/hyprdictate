@@ -68,8 +68,12 @@ namespace hyprdictate {
         try {
             tbl = toml::parse_file(path.string());
         } catch (const toml::parse_error& e) {
+            // toml++ 3.4+ returns description() as std::string_view;
+            // materialise it before concatenation so operator+ picks
+            // the char-owning std::string path instead of the deleted
+            // string+string_view overload.
             throw ConfigError(std::string{"config parse error at "} + path.string()
-                              + ": " + e.description());
+                              + ": " + std::string{e.description()});
         }
 
         Config c;
