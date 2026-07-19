@@ -1,5 +1,6 @@
 #define WLR_USE_UNSTABLE
 
+#include <memory>
 #include <stdexcept>
 #include <string>
 
@@ -7,12 +8,39 @@
 #include <hyprland/src/plugins/PluginAPI.hpp>
 
 #include "globals.hpp"
+#include "hyprdictate/state.hpp"
 #include "log.hpp"
+#include "socket_client.hpp"
 
-// PLUGIN_API_VERSION returns the ABI tag baked into the Hyprland
-// headers at build time. Do NOT change. Hyprland compares this
-// against its own hash before running any plugin code; a mismatch
-// prevents load.
+namespace {
+
+    // The daemon socket client lives as long as the plugin is
+    // loaded. Static unique_ptr rather than a namespace-scope object
+    // so the destructor fires during PLUGIN_EXIT's stack unwind and
+    // not at unpredictable global-teardown time.
+    std::unique_ptr<hyprdictate::SocketClient> g_socketClient;
+
+    void onDaemonState(hyprdictate::State s) {
+        // M2.7 fans this out onto Hyprland's socket2 so the M3 widget
+        // can subscribe. M2.5 also hooks into recording transitions
+        // to snapshot the target window. For this commit, just log.
+        hyprdictate::log::info("daemon state = {}",
+                               hyprdictate::formatState(s));
+    }
+
+    void onDaemonTranscript(const std::string& text) {
+        // M2.5 pipes this into the virtual-keyboard injector. Log
+        // for now so the plumbing is observable end-to-end.
+        hyprdictate::log::info("daemon transcript ({} chars): {}",
+                               text.size(), text);
+    }
+
+    void onDaemonError(const std::string& msg) {
+        hyprdictate::log::warn("daemon error: {}", msg);
+    }
+
+}
+
 APICALL EXPORT std::string PLUGIN_API_VERSION() {
     return HYPRLAND_API_VERSION;
 }
@@ -24,7 +52,6 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
     // currently running. If they diverge, the ABI can differ even
     // when the API tag matches, and any HyprlandAPI call becomes
     // undefined behaviour. Refuse to load rather than crash later.
-    // Same pattern hyprwsmode uses.
     const std::string HASH        = __hyprland_api_get_hash();
     const std::string CLIENT_HASH = __hyprland_api_get_client_hash();
     if (HASH != CLIENT_HASH) {
@@ -36,18 +63,33 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
         throw std::runtime_error("[hyprdictate] version mismatch");
     }
 
-    // Later M2 commits register dispatchers, config values, the
-    // daemon socket client, the virtual keyboard for injection, and
-    // the border-indicator listeners here. This skeleton commit only
-    // proves the plugin loads and unloads cleanly.
+    // Bring up the daemon socket client. A connect failure is not
+    // fatal — the plugin still loads, dispatchers still register
+    // (M2.3), they just report the disconnected state when the user
+    // triggers one. This lets the compositor come up before the
+    // daemon in scripted startups.
+    g_socketClient = std::make_unique<hyprdictate::SocketClient>(
+        hyprdictate::SocketClient::Callbacks{
+            .onState      = &onDaemonState,
+            .onTranscript = &onDaemonTranscript,
+            .onError      = &onDaemonError,
+        });
 
-    HyprlandAPI::addNotification(
-        PHANDLE,
-        "[hyprdictate] loaded",
-        CHyprColor{0.2, 1.0, 0.2, 1.0},
-        3000);
-
-    hyprdictate::log::info("plugin loaded (skeleton)");
+    if (g_socketClient->connect()) {
+        HyprlandAPI::addNotification(
+            PHANDLE,
+            "[hyprdictate] loaded and connected to daemon",
+            CHyprColor{0.2, 1.0, 0.2, 1.0},
+            3000);
+        hyprdictate::log::info("plugin loaded, daemon connection open");
+    } else {
+        HyprlandAPI::addNotification(
+            PHANDLE,
+            "[hyprdictate] loaded (daemon unreachable, will retry on next load)",
+            CHyprColor{1.0, 0.7, 0.2, 1.0},
+            4000);
+        hyprdictate::log::warn("plugin loaded but daemon connection failed");
+    }
 
     return {"hyprdictate",
             "Voice dictation integration for Hyprland",
@@ -56,5 +98,10 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
 }
 
 APICALL EXPORT void PLUGIN_EXIT() {
+    // Explicit reset so the SocketClient destructor unregisters from
+    // Hyprland's wl_event_loop before the compositor tears the loop
+    // down; a late-teardown source removal would poke a dangling
+    // event_loop pointer.
+    g_socketClient.reset();
     hyprdictate::log::info("plugin unloaded");
 }

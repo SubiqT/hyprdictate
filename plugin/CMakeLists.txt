@@ -15,10 +15,11 @@ if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
     add_compile_options(--no-gnu-unique)
 endif()
 
-# Baseline plugin sources. Later M2 commits add socket_client.cpp,
-# dispatcher.cpp, injector.cpp, and indicator.cpp alongside.
+# Baseline plugin sources. Later M2 commits add dispatcher.cpp,
+# injector.cpp, and indicator.cpp alongside.
 add_library(hyprdictate_plugin SHARED
     src/main.cpp
+    src/socket_client.cpp
 )
 
 # Match hyprwsmode's dep list: hyprland's headers, wlroots protocol
