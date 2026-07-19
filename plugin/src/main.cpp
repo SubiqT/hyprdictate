@@ -7,18 +7,13 @@
 #include <hyprland/src/helpers/Color.hpp>
 #include <hyprland/src/plugins/PluginAPI.hpp>
 
+#include "dispatcher.hpp"
 #include "globals.hpp"
 #include "hyprdictate/state.hpp"
 #include "log.hpp"
 #include "socket_client.hpp"
 
 namespace {
-
-    // The daemon socket client lives as long as the plugin is
-    // loaded. Static unique_ptr rather than a namespace-scope object
-    // so the destructor fires during PLUGIN_EXIT's stack unwind and
-    // not at unpredictable global-teardown time.
-    std::unique_ptr<hyprdictate::SocketClient> g_socketClient;
 
     void onDaemonState(hyprdictate::State s) {
         // M2.7 fans this out onto Hyprland's socket2 so the M3 widget
@@ -64,18 +59,26 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
     }
 
     // Bring up the daemon socket client. A connect failure is not
-    // fatal — the plugin still loads, dispatchers still register
-    // (M2.3), they just report the disconnected state when the user
+    // fatal — the plugin still loads, dispatchers still register,
+    // they just report the disconnected state when the user
     // triggers one. This lets the compositor come up before the
     // daemon in scripted startups.
-    g_socketClient = std::make_unique<hyprdictate::SocketClient>(
+    hyprdictate::g_plugin.socket = std::make_unique<hyprdictate::SocketClient>(
         hyprdictate::SocketClient::Callbacks{
             .onState      = &onDaemonState,
             .onTranscript = &onDaemonTranscript,
             .onError      = &onDaemonError,
         });
 
-    if (g_socketClient->connect()) {
+    const bool connected = hyprdictate::g_plugin.socket->connect();
+
+    // Register dispatchers regardless of connect success: users still
+    // want `hyprctl dispatch hyprdictate:toggle` to give a
+    // "daemon not connected" error rather than a "unknown dispatcher"
+    // one, which is much less helpful.
+    hyprdictate::registerDispatchers();
+
+    if (connected) {
         HyprlandAPI::addNotification(
             PHANDLE,
             "[hyprdictate] loaded and connected to daemon",
@@ -85,7 +88,7 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
     } else {
         HyprlandAPI::addNotification(
             PHANDLE,
-            "[hyprdictate] loaded (daemon unreachable, will retry on next load)",
+            "[hyprdictate] loaded (daemon unreachable, dispatch to reconnect)",
             CHyprColor{1.0, 0.7, 0.2, 1.0},
             4000);
         hyprdictate::log::warn("plugin loaded but daemon connection failed");
@@ -102,6 +105,6 @@ APICALL EXPORT void PLUGIN_EXIT() {
     // Hyprland's wl_event_loop before the compositor tears the loop
     // down; a late-teardown source removal would poke a dangling
     // event_loop pointer.
-    g_socketClient.reset();
+    hyprdictate::g_plugin.socket.reset();
     hyprdictate::log::info("plugin unloaded");
 }
