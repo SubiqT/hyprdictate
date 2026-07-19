@@ -39,3 +39,4 @@ include(cmake/deps.cmake)
 
 add_subdirectory(shared)
 add_subdirectory(daemon)
+add_subdirectory(cli)
