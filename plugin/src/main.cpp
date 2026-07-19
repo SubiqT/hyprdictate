@@ -76,9 +76,20 @@ namespace {
             return;
         }
 
-        if (!hyprdictate::g_plugin.injector->startInject(
-                hyprdictate::g_plugin.targetWindow, text)) {
-            hyprdictate::log::warn(
+        // Snapshot then clear the captured window before the inject
+        // call. If targetWindow is empty here (weak ref points at
+        // nothing), this transcript came from a non-plugin recording
+        // (CLI toggle, etc.) — injector's own null check refuses to
+        // fire and daemon-side wtype handles it. If targetWindow is
+        // set, this was a plugin-dispatched recording and the plugin
+        // injects into its captured target. Clearing after the call
+        // ensures the next non-plugin recording doesn't inject into
+        // a stale window from an earlier plugin dispatch.
+        const auto target = hyprdictate::g_plugin.targetWindow;
+        hyprdictate::g_plugin.targetWindow.reset();
+
+        if (!hyprdictate::g_plugin.injector->startInject(target, text)) {
+            hyprdictate::log::debug(
                 "transcript ({} chars) not injected — see prior warning",
                 text.size());
         }
