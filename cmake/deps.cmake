@@ -19,28 +19,6 @@ include(FetchContent)
 
 set(FETCHCONTENT_QUIET OFF)
 
-# --- spdlog (daemon only) ---
-#
-# 1.13.0 gets us std::format-backed formatters and drops the older
-# fmt-headers-only workaround. spdlog::spdlog remains the canonical
-# target regardless of source. The plugin uses a stderr shim to
-# match hyprwsmode; only the daemon links spdlog.
-if(HYPRDICTATE_BUILD_DAEMON)
-    find_package(spdlog 1.12 QUIET CONFIG)
-    if(NOT spdlog_FOUND)
-        message(STATUS "hyprdictate: spdlog not found, fetching")
-        FetchContent_Declare(
-            hyprdictate_spdlog
-            GIT_REPOSITORY https://github.com/gabime/spdlog.git
-            GIT_TAG        v1.13.0
-            GIT_SHALLOW    TRUE
-        )
-        set(SPDLOG_BUILD_EXAMPLE OFF CACHE INTERNAL "")
-        set(SPDLOG_BUILD_TESTS   OFF CACHE INTERNAL "")
-        FetchContent_MakeAvailable(hyprdictate_spdlog)
-    endif()
-endif()
-
 # --- CLI11 (daemon + CLI) ---
 #
 # CLI11 is single-header; find_package resolves the standard

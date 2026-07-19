@@ -35,6 +35,26 @@ if(NOT tomlplusplus_FOUND)
     FetchContent_MakeAvailable(hyprdictate_tomlplusplus)
 endif()
 
+# --- spdlog ---
+#
+# 1.13.0 gets us std::format-backed formatters and drops the older
+# fmt-headers-only workaround. The plugin uses a stderr shim to
+# match hyprwsmode; only the daemon links spdlog.
+find_package(spdlog 1.12 QUIET CONFIG)
+if(NOT spdlog_FOUND)
+    include(FetchContent)
+    message(STATUS "hyprdictate/daemon: spdlog not found, fetching")
+    FetchContent_Declare(
+        hyprdictate_spdlog
+        GIT_REPOSITORY https://github.com/gabime/spdlog.git
+        GIT_TAG        v1.13.0
+        GIT_SHALLOW    TRUE
+    )
+    set(SPDLOG_BUILD_EXAMPLE OFF CACHE INTERNAL "")
+    set(SPDLOG_BUILD_TESTS   OFF CACHE INTERNAL "")
+    FetchContent_MakeAvailable(hyprdictate_spdlog)
+endif()
+
 pkg_check_modules(PIPEWIRE REQUIRED IMPORTED_TARGET libpipewire-0.3)
 
 find_package(whisper QUIET CONFIG)
