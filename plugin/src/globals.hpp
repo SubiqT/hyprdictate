@@ -6,6 +6,7 @@
 #include <hyprland/src/plugins/PluginAPI.hpp>
 
 #include "hyprdictate/state.hpp"
+#include "injector.hpp"
 #include "socket_client.hpp"
 
 // PHANDLE is the handle Hyprland gives us at PLUGIN_INIT. Required
@@ -40,6 +41,11 @@ namespace hyprdictate {
         // surface even if focus has since drifted. Cleared when the
         // recording completes or cancels.
         PHLWINDOWREF targetWindow;
+
+        // Deterministic-target injector. Owned by the plugin state
+        // so its lifetime is tied to PLUGIN_INIT/EXIT and any
+        // in-flight wtype gets detached rather than orphaned.
+        std::unique_ptr<Injector> injector;
     };
 
     inline SPluginState g_plugin = {};

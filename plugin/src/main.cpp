@@ -10,6 +10,7 @@
 #include "dispatcher.hpp"
 #include "globals.hpp"
 #include "hyprdictate/state.hpp"
+#include "injector.hpp"
 #include "log.hpp"
 #include "socket_client.hpp"
 
@@ -20,9 +21,8 @@ namespace {
 
         // Clear the captured window on any terminal transition so a
         // stale PHLWINDOWREF doesn't drift into the next recording.
-        // The Recording→Transcribing edge keeps it, since M2.5's
-        // injector still needs to type into the same window when
-        // the transcript arrives.
+        // The Recording→Transcribing edge keeps it so M2.5's injector
+        // still has the target when the transcript arrives.
         if (s == hyprdictate::State::Idle ||
             s == hyprdictate::State::Error ||
             s == hyprdictate::State::Cancelled) {
@@ -36,10 +36,22 @@ namespace {
     }
 
     void onDaemonTranscript(const std::string& text) {
-        // M2.5 pipes this into the virtual-keyboard injector. Log
-        // for now so the plumbing is observable end-to-end.
-        hyprdictate::log::info("daemon transcript ({} chars): {}",
-                               text.size(), text);
+        // Hand the transcript to the injector, which shifts keyboard
+        // focus to the captured target surface, spawns wtype to type
+        // the text, and restores focus asynchronously via a pidfd
+        // hook on Hyprland's own event loop.
+        if (!hyprdictate::g_plugin.injector) {
+            hyprdictate::log::warn(
+                "transcript arrived but injector not initialised");
+            return;
+        }
+
+        if (!hyprdictate::g_plugin.injector->startInject(
+                hyprdictate::g_plugin.targetWindow, text)) {
+            hyprdictate::log::warn(
+                "transcript ({} chars) not injected — see prior warning",
+                text.size());
+        }
     }
 
     void onDaemonError(const std::string& msg) {
@@ -70,11 +82,12 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
         throw std::runtime_error("[hyprdictate] version mismatch");
     }
 
+    hyprdictate::g_plugin.injector = std::make_unique<hyprdictate::Injector>();
+
     // Bring up the daemon socket client. A connect failure is not
     // fatal — the plugin still loads, dispatchers still register,
     // they just report the disconnected state when the user
-    // triggers one. This lets the compositor come up before the
-    // daemon in scripted startups.
+    // triggers one.
     hyprdictate::g_plugin.socket = std::make_unique<hyprdictate::SocketClient>(
         hyprdictate::SocketClient::Callbacks{
             .onState      = &onDaemonState,
@@ -113,10 +126,11 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
 }
 
 APICALL EXPORT void PLUGIN_EXIT() {
-    // Explicit reset so the SocketClient destructor unregisters from
-    // Hyprland's wl_event_loop before the compositor tears the loop
-    // down; a late-teardown source removal would poke a dangling
-    // event_loop pointer.
+    // Explicit reset in dependency order: injector may still hold a
+    // pidfd on Hyprland's event loop, so tear it down before the
+    // socket client (which sits on the same loop) so we don't leave
+    // ordering surprises during compositor shutdown.
+    hyprdictate::g_plugin.injector.reset();
     hyprdictate::g_plugin.socket.reset();
     hyprdictate::log::info("plugin unloaded");
 }
