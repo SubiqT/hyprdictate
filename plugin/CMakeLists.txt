@@ -60,7 +60,7 @@ target_link_libraries(hyprdictate_plugin
 # Hyprland at ${plugin}/lib/libhyprdictate.so directly, matching the
 # hyprwsmode integration pattern.
 set_target_properties(hyprdictate_plugin PROPERTIES
-    OUTPUT_NAME hyprdictate
+    OUTPUT_NAME hyprdictate-plugin
     PREFIX      lib
 )
 
