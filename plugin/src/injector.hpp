@@ -33,8 +33,9 @@
 
 #include <hyprland/src/desktop/DesktopTypes.hpp>
 
+#include <hyprland/src/helpers/memory/Memory.hpp>
+
 class CWLSurfaceResource;
-template <class T> class WP;
 struct wl_event_source;
 
 namespace hyprdictate {

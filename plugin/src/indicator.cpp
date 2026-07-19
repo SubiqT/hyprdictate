@@ -34,11 +34,11 @@ namespace hyprdictate {
             auto pColor   = HyprlandAPI::getConfigValue(PHANDLE, "plugin:hyprdictate:indicator_border_color");
 
             if (pEnabled) {
-                if (auto* bv = dynamic_cast<Config::Values::CBoolValue*>(pEnabled.get()))
+                if (auto* bv = dynamic_cast<Config::Values::CBoolValue*>(pEnabled))
                     out.enabled = bv->value();
             }
             if (pColor) {
-                if (auto* cv = dynamic_cast<Config::Values::CColorValue*>(pColor.get()))
+                if (auto* cv = dynamic_cast<Config::Values::CColorValue*>(pColor))
                     out.argb = static_cast<uint64_t>(cv->value());
             }
 
