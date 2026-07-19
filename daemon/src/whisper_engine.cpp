@@ -7,6 +7,7 @@
 
 #include <spdlog/spdlog.h>
 #include <whisper.h>
+#include <ggml-backend.h>
 
 namespace hyprdictate {
 
@@ -35,6 +36,15 @@ namespace hyprdictate {
         // without checking would silently fail on a CPU-only build.
         // A config option lives in the deferred backlog.
         cparams.use_gpu = false;
+
+        // Nixpkgs' whisper-cpp (and any build with GGML_BACKEND_DL=ON)
+        // ships each ggml backend as a separate shared library
+        // (libggml-cpu-*.so, libggml-cuda.so, ...). Without this call
+        // whisper_init_from_file_with_params fails inside make_buft_list
+        // with GGML_ASSERT(device), because no device has been
+        // registered. Loading all backends up front covers the CPU
+        // microarch variants that ggml auto-dispatches between.
+        ggml_backend_load_all();
 
         m_ctx = whisper_init_from_file_with_params(
             m_modelPath.string().c_str(), cparams);
