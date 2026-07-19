@@ -58,7 +58,8 @@ namespace hyprdictate {
 
         switch (m_state.load(std::memory_order_acquire)) {
             case State::Idle:
-                m_window = window;
+                m_window                = window;
+                m_clientOwnsInjection   = window.has_value();
                 m_audio.start();
                 setState(State::Recording);
                 return std::nullopt;
@@ -91,7 +92,8 @@ namespace hyprdictate {
             return std::nullopt;
         }
 
-        m_window = window;
+        m_window                = window;
+        m_clientOwnsInjection   = window.has_value();
         m_audio.start();
         setState(State::Recording);
         return std::nullopt;
@@ -207,6 +209,7 @@ namespace hyprdictate {
 
     void Session::completeTranscription(std::string text) {
         std::optional<WindowContext> window;
+        bool clientOwns = false;
         {
             std::lock_guard<std::mutex> guard(m_mutex);
 
@@ -219,7 +222,8 @@ namespace hyprdictate {
                 return;
             }
 
-            window = m_window;
+            window     = m_window;
+            clientOwns = m_clientOwnsInjection;
             m_window.reset();
             setState(State::Idle);
         }
@@ -229,7 +233,22 @@ namespace hyprdictate {
             return;
         }
 
+        // The transcript event fans out to every subscriber, whether
+        // or not the daemon itself will type. Plugin-owned recordings
+        // rely on the plugin listening for this and driving its own
+        // wlr_virtual_keyboard_v1 injection.
         m_emitter(event::Transcript{ .text = text });
+
+        // Suppress the internal wtype fallback when the client owns
+        // injection. Doing this per-recording (rather than by "is
+        // any plugin connected") lets a shell `hyprdictate toggle`
+        // still type via wtype while a plugin is loaded, because
+        // that recording had no window context and therefore no
+        // client injector committed to it.
+        if (clientOwns) {
+            spdlog::info("wtype skipped: recording owned by client");
+            return;
+        }
 
         // Injection happens outside the mutex: it may block on a
         // subprocess spawn and shouldn't hold up incoming commands.
@@ -252,6 +271,17 @@ namespace hyprdictate {
         // Callers hold m_mutex; the atomic store publishes to
         // observers that read state() lock-free.
         m_state.store(s, std::memory_order_release);
+
+        // Idle is the terminal state at the end of every recording
+        // lifecycle (successful, cancelled, or errored). Resetting
+        // the ownership flag here — rather than at each individual
+        // callsite — means a future codepath that transitions to
+        // Idle without going through completeTranscription/
+        // failTranscription/handleCancel still gets a clean slate
+        // for the next recording.
+        if (s == State::Idle)
+            m_clientOwnsInjection = false;
+
         emitStateEvent();
     }
 

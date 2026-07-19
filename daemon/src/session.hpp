@@ -96,6 +96,24 @@ namespace hyprdictate {
         // uses the original window even if focus has drifted by the
         // time transcription completes.
         std::optional<WindowContext> m_window;
+
+        // Injection ownership for the current recording.
+        //
+        // Set at the Idle→Recording edge based on whether the
+        // starting command carried a window context. Presence of a
+        // window = the client (in practice, the Hyprland plugin)
+        // committed to a specific target and will inject through
+        // wlr_virtual_keyboard_v1 when the transcript arrives.
+        // Absence of a window = anonymous/CLI recording; the daemon
+        // must fall back to wtype.
+        //
+        // Gating on this per-recording flag rather than on "is any
+        // plugin currently connected" lets both flows coexist in
+        // one session: `hyprdictate toggle` from a shell still types
+        // via wtype even while the plugin is loaded, since the
+        // plugin didn't originate that recording and its dispatcher
+        // never captured a target for it.
+        bool m_clientOwnsInjection = false;
     };
 
 }
