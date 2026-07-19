@@ -5,15 +5,21 @@
 // The capture path is deliberately narrow: request F32 mono at whisper's
 // native 16 kHz, let PipeWire's audio adapter resample from whichever
 // default source the session graph offers, and accumulate float samples
-// into an in-memory buffer for later transcription. Streaming and VAD
-// belong to a later milestone; M1's toggle flow needs one buffer per
-// utterance.
+// into an in-memory buffer for later transcription. In parallel with
+// buffering samples for whisper, the class runs a rolling RMS
+// accumulator and calls a caller-supplied LevelCallback every
+// ~50 ms — used by the widget to draw a live meter.
 //
 // The class owns a pw_thread_loop that runs on its own thread. Every
 // call that touches PipeWire state takes the loop lock internally so
 // state transitions from the daemon's main thread don't race the
-// realtime process callback.
+// realtime process callback. LevelCallback fires on the PipeWire
+// thread; callers must post it back onto their own thread if their
+// consumer isn't thread-safe (ipc->broadcast already handles this
+// via asio::post).
 
+#include <cstdint>
+#include <functional>
 #include <mutex>
 #include <stdexcept>
 #include <vector>
@@ -37,6 +43,19 @@ namespace hyprdictate {
         // buffer sizes and utterance durations don't have to guess.
         static constexpr int kSampleRate = 16000;
 
+        // A LevelCallback receives a normalised RMS-in-dB level in
+        // the range [0, 1] every ~50 ms while capture is active.
+        // -60 dBFS maps to 0, -0 dBFS maps to 1; typical speech
+        // peaks land around 0.4-0.7 on this scale, which reads
+        // well on a small bar-widget graph without needing per-user
+        // gain calibration.
+        //
+        // Fired on the PipeWire thread. Callers whose sink isn't
+        // thread-safe should post onto their own thread inside the
+        // callback (the daemon's ipc->broadcast is already safe via
+        // asio::post).
+        using LevelCallback = std::function<void(float)>;
+
         // Initialises PipeWire, spins up the capture thread_loop, and
         // connects a core to the session daemon. Throws AudioError
         // on any failure; the caller treats that as a fatal daemon-
@@ -48,6 +67,12 @@ namespace hyprdictate {
         AudioCapture& operator=(const AudioCapture&) = delete;
         AudioCapture(AudioCapture&&)                 = delete;
         AudioCapture& operator=(AudioCapture&&)      = delete;
+
+        // Install the level callback. Call once before start(); the
+        // callback is retained for the AudioCapture's lifetime. A
+        // null callback disables level emission (and skips the
+        // per-sample RMS work).
+        void setLevelCallback(LevelCallback cb);
 
         // Begin recording. Clears any residual buffer and connects a
         // fresh stream. Idempotent: calling start() while already
@@ -94,6 +119,17 @@ namespace hyprdictate {
         std::vector<float> m_pcm;
 
         bool m_capturing = false;
+
+        // Level metering: sum-of-squares accumulator + sample count.
+        // The process callback advances both under an implicit
+        // single-threaded contract (only the PipeWire thread writes;
+        // the capture thread_loop serialises callbacks). Every time
+        // m_levelSamples crosses kLevelWindow (~50 ms at 16 kHz) the
+        // callback computes RMS, maps to a normalised [0, 1] level,
+        // resets the accumulator, and fires m_levelCallback.
+        LevelCallback m_levelCallback;
+        double        m_levelSumSquares = 0.0;
+        std::uint64_t m_levelSamples    = 0;
     };
 
 }

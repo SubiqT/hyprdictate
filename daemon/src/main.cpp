@@ -180,6 +180,16 @@ int main(int argc, char** argv) {
         return 5;
     }
 
+    // Level meter fan-out: AudioCapture fires the callback from the
+    // PipeWire thread every ~50 ms while a stream is connected.
+    // ipc->broadcast is thread-safe (posts onto the io_context), so
+    // no additional marshalling is required. Only fires during
+    // Recording — the stream is torn down on stop/cancel.
+    audio->setLevelCallback([&ipc](float level) {
+        if (ipc)
+            ipc->broadcast(hyprdictate::event::Level{ .value = level });
+    });
+
     // Graceful shutdown on SIGINT/SIGTERM: cancel any in-flight
     // accept and let io.run() unwind. asio::signal_set is a
     // cross-platform wrapper over sigaction/sigprocmask.

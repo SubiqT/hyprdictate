@@ -1,5 +1,7 @@
 #include "audio.hpp"
 
+#include <algorithm>
+#include <cmath>
 #include <cstdint>
 #include <cstring>
 #include <mutex>
@@ -89,8 +91,41 @@ namespace hyprdictate {
                 const auto* frames = reinterpret_cast<const float*>(base + off);
                 const auto  count  = bytes / sizeof(float);
 
-                std::lock_guard<std::mutex> guard(self.m_bufMutex);
-                self.m_pcm.insert(self.m_pcm.end(), frames, frames + count);
+                {
+                    std::lock_guard<std::mutex> guard(self.m_bufMutex);
+                    self.m_pcm.insert(self.m_pcm.end(), frames, frames + count);
+                }
+
+                // Level metering: accumulate sum-of-squares in a
+                // rolling window, fire the callback each time the
+                // window closes so the widget sees ~20 Hz updates.
+                //
+                // 800 samples @ 16 kHz = 50 ms. Chosen to match
+                // human loudness integration well enough for a
+                // visual meter while keeping event rate modest.
+                // The dB-normalised mapping puts speech peaks in a
+                // legible mid range on the widget rather than
+                // slamming the meter with a small linear amplitude.
+                if (self.m_levelCallback) {
+                    constexpr std::uint64_t kLevelWindow = 800;
+                    for (std::size_t i = 0; i < count; ++i) {
+                        const float s = frames[i];
+                        self.m_levelSumSquares += static_cast<double>(s) * s;
+                        self.m_levelSamples++;
+                        if (self.m_levelSamples >= kLevelWindow) {
+                            const double meanSq = self.m_levelSumSquares
+                                                  / static_cast<double>(self.m_levelSamples);
+                            const float rms = static_cast<float>(std::sqrt(meanSq));
+                            const float db  = 20.0f *
+                                std::log10(std::max(rms, 1e-6f));
+                            const float norm = std::clamp((db + 60.0f) / 60.0f,
+                                                          0.0f, 1.0f);
+                            self.m_levelSumSquares = 0.0;
+                            self.m_levelSamples    = 0;
+                            self.m_levelCallback(norm);
+                        }
+                    }
+                }
             }
         }
 
@@ -163,6 +198,16 @@ namespace hyprdictate {
         return m_capturing;
     }
 
+    void AudioCapture::setLevelCallback(LevelCallback cb) {
+        // Take the loop lock so a callback fire mid-swap can't read
+        // half-installed state. The store itself is one pointer wide,
+        // but std::function's SBO/heap dance means "half-installed"
+        // isn't hypothetical.
+        pw_thread_loop_lock(m_loop);
+        m_levelCallback = std::move(cb);
+        pw_thread_loop_unlock(m_loop);
+    }
+
     void AudioCapture::start() {
         if (m_capturing)
             return;
@@ -176,6 +221,12 @@ namespace hyprdictate {
             std::lock_guard<std::mutex> guard(m_bufMutex);
             m_pcm.clear();
         }
+
+        // Reset the level accumulator. Only the PipeWire thread
+        // touches these normally, but we hold the loop lock here so
+        // this write races nothing.
+        m_levelSumSquares = 0.0;
+        m_levelSamples    = 0;
 
         pw_properties* props = pw_properties_new(
             PW_KEY_MEDIA_TYPE,     "Audio",
