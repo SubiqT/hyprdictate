@@ -22,6 +22,7 @@ add_library(hyprdictate_plugin SHARED
     src/socket_client.cpp
     src/dispatcher.cpp
     src/injector.cpp
+    src/indicator.cpp
 )
 
 # Match hyprwsmode's dep list: hyprland's headers, wlroots protocol

@@ -6,6 +6,7 @@
 #include <hyprland/src/plugins/PluginAPI.hpp>
 
 #include "hyprdictate/state.hpp"
+#include "indicator.hpp"
 #include "injector.hpp"
 #include "socket_client.hpp"
 
@@ -46,6 +47,12 @@ namespace hyprdictate {
         // so its lifetime is tied to PLUGIN_INIT/EXIT and any
         // in-flight wtype gets detached rather than orphaned.
         std::unique_ptr<Injector> injector;
+
+        // Border-colour indicator on the target window. Toggles on
+        // the Recording state edge and reads its own gate + colour
+        // from Hyprland's plugin:hyprdictate:indicator_border[_color]
+        // config values.
+        std::unique_ptr<Indicator> indicator;
     };
 
     inline SPluginState g_plugin = {};

@@ -4,24 +4,65 @@
 #include <stdexcept>
 #include <string>
 
+#include <hyprland/src/config/values/ConfigValues.hpp>
+#include <hyprland/src/config/values/types/BoolValue.hpp>
+#include <hyprland/src/config/values/types/ColorValue.hpp>
 #include <hyprland/src/helpers/Color.hpp>
 #include <hyprland/src/plugins/PluginAPI.hpp>
 
 #include "dispatcher.hpp"
 #include "globals.hpp"
 #include "hyprdictate/state.hpp"
+#include "indicator.hpp"
 #include "injector.hpp"
 #include "log.hpp"
 #include "socket_client.hpp"
 
 namespace {
 
+    // Register the plugin's Hyprland config values. Following
+    // hyprwsmode's precedent these live in the `plugin:hyprdictate:*`
+    // namespace and are consumed via HyprlandAPI::getConfigValue by
+    // whichever subsystem needs them (indicator.cpp today; future
+    // features add to this table without a globals bump).
+    void registerConfigValues() {
+        auto border = makeShared<Config::Values::CBoolValue>(
+            "plugin:hyprdictate:indicator_border",
+            "Highlight the recording target window's border while dictating",
+            false);
+        HyprlandAPI::addConfigValueV2(PHANDLE, border);
+
+        // ARGB integer; hyprland.conf accepts 0xAARRGGBB literals for
+        // this type. Default is a muted red so a mis-configured
+        // enabler doesn't disappear against typical themes.
+        auto color = makeShared<Config::Values::CColorValue>(
+            "plugin:hyprdictate:indicator_border_color",
+            "Border colour applied while dictating (0xAARRGGBB)",
+            Config::INTEGER{0xffff5555ULL});
+        HyprlandAPI::addConfigValueV2(PHANDLE, color);
+    }
+
+    // Track the Recording edge so the border override fires exactly
+    // once per record cycle. Falling into Recording again without an
+    // intervening Idle would apply the override twice; explicit edge
+    // detection avoids that.
     void onDaemonState(hyprdictate::State s) {
+        const auto prev = hyprdictate::g_plugin.daemonState;
         hyprdictate::g_plugin.daemonState = s;
+
+        const bool wasRecording = (prev == hyprdictate::State::Recording);
+        const bool nowRecording = (s == hyprdictate::State::Recording);
+
+        if (!wasRecording && nowRecording && hyprdictate::g_plugin.indicator) {
+            hyprdictate::g_plugin.indicator->startRecording(
+                hyprdictate::g_plugin.targetWindow);
+        } else if (wasRecording && !nowRecording && hyprdictate::g_plugin.indicator) {
+            hyprdictate::g_plugin.indicator->stopRecording();
+        }
 
         // Clear the captured window on any terminal transition so a
         // stale PHLWINDOWREF doesn't drift into the next recording.
-        // The Recording→Transcribing edge keeps it so M2.5's injector
+        // The Recording→Transcribing edge keeps it so the injector
         // still has the target when the transcript arrives.
         if (s == hyprdictate::State::Idle ||
             s == hyprdictate::State::Error ||
@@ -36,10 +77,6 @@ namespace {
     }
 
     void onDaemonTranscript(const std::string& text) {
-        // Hand the transcript to the injector, which shifts keyboard
-        // focus to the captured target surface, spawns wtype to type
-        // the text, and restores focus asynchronously via a pidfd
-        // hook on Hyprland's own event loop.
         if (!hyprdictate::g_plugin.injector) {
             hyprdictate::log::warn(
                 "transcript arrived but injector not initialised");
@@ -67,10 +104,6 @@ APICALL EXPORT std::string PLUGIN_API_VERSION() {
 APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
     PHANDLE = handle;
 
-    // Compare the Hyprland commit hash we compiled against to the one
-    // currently running. If they diverge, the ABI can differ even
-    // when the API tag matches, and any HyprlandAPI call becomes
-    // undefined behaviour. Refuse to load rather than crash later.
     const std::string HASH        = __hyprland_api_get_hash();
     const std::string CLIENT_HASH = __hyprland_api_get_client_hash();
     if (HASH != CLIENT_HASH) {
@@ -82,12 +115,15 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
         throw std::runtime_error("[hyprdictate] version mismatch");
     }
 
-    hyprdictate::g_plugin.injector = std::make_unique<hyprdictate::Injector>();
+    // Register Hyprland config values before reloading so user
+    // hyprland.conf values are honoured on first parse. Same order
+    // hyprwsmode uses.
+    registerConfigValues();
+    HyprlandAPI::reloadConfig();
 
-    // Bring up the daemon socket client. A connect failure is not
-    // fatal — the plugin still loads, dispatchers still register,
-    // they just report the disconnected state when the user
-    // triggers one.
+    hyprdictate::g_plugin.injector  = std::make_unique<hyprdictate::Injector>();
+    hyprdictate::g_plugin.indicator = std::make_unique<hyprdictate::Indicator>();
+
     hyprdictate::g_plugin.socket = std::make_unique<hyprdictate::SocketClient>(
         hyprdictate::SocketClient::Callbacks{
             .onState      = &onDaemonState,
@@ -100,7 +136,7 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
     // Register dispatchers regardless of connect success: users still
     // want `hyprctl dispatch hyprdictate:toggle` to give a
     // "daemon not connected" error rather than a "unknown dispatcher"
-    // one, which is much less helpful.
+    // one.
     hyprdictate::registerDispatchers();
 
     if (connected) {
@@ -126,10 +162,11 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
 }
 
 APICALL EXPORT void PLUGIN_EXIT() {
-    // Explicit reset in dependency order: injector may still hold a
-    // pidfd on Hyprland's event loop, so tear it down before the
-    // socket client (which sits on the same loop) so we don't leave
-    // ordering surprises during compositor shutdown.
+    // Explicit reset in dependency order so an in-flight injector
+    // doesn't outlive the compositor's wl_event_loop, and the
+    // socket client's event source tears down before Hyprland
+    // reclaims the fd table.
+    hyprdictate::g_plugin.indicator.reset();
     hyprdictate::g_plugin.injector.reset();
     hyprdictate::g_plugin.socket.reset();
     hyprdictate::log::info("plugin unloaded");
