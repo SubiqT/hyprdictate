@@ -8,6 +8,7 @@
 #include <hyprland/src/config/values/types/BoolValue.hpp>
 #include <hyprland/src/config/values/types/ColorValue.hpp>
 #include <hyprland/src/helpers/Color.hpp>
+#include <hyprland/src/managers/EventManager.hpp>
 #include <hyprland/src/plugins/PluginAPI.hpp>
 
 #include "dispatcher.hpp"
@@ -70,8 +71,21 @@ namespace {
             hyprdictate::g_plugin.targetWindow.reset();
         }
 
-        // M2.7 fans this out onto Hyprland's socket2 so the M3 widget
-        // can subscribe.
+        // Fan out onto Hyprland's socket2 so the M3 Noctalia widget
+        // and any other socket2 subscriber sees state changes. Format
+        // matches design.md: `hyprdictate>>state,<value>`. Redundant
+        // emits (same state twice) are already avoided upstream —
+        // the daemon only publishes StateChanged on genuine
+        // transitions — but the prev == s guard here keeps the wire
+        // clean even if a future daemon rework replays state.
+        if (prev != s && g_pEventManager) {
+            g_pEventManager->postEvent(SHyprIPCEvent{
+                .event = "hyprdictate",
+                .data  = std::string{"state,"}
+                       + std::string{hyprdictate::formatState(s)},
+            });
+        }
+
         hyprdictate::log::info("daemon state = {}",
                                hyprdictate::formatState(s));
     }
