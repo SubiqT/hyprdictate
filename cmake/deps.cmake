@@ -39,40 +39,46 @@ if(NOT nlohmann_json_FOUND)
     FetchContent_MakeAvailable(hyprdictate_json)
 endif()
 
-# --- tomlplusplus ---
+# --- tomlplusplus (daemon only) ---
 #
 # 3.4.0 is the first release that exposes toml::parse_file with a
 # std::filesystem::path overload, letting the daemon consume the
-# XDG-resolved path directly.
-find_package(tomlplusplus 3.3 QUIET CONFIG)
-if(NOT tomlplusplus_FOUND)
-    message(STATUS "hyprdictate: tomlplusplus not found, fetching")
-    FetchContent_Declare(
-        hyprdictate_tomlplusplus
-        GIT_REPOSITORY https://github.com/marzer/tomlplusplus.git
-        GIT_TAG        v3.4.0
-        GIT_SHALLOW    TRUE
-    )
-    FetchContent_MakeAvailable(hyprdictate_tomlplusplus)
+# XDG-resolved path directly. Gated by the daemon build option so
+# a CLI-only Nix build doesn't require this dep in its buildInputs.
+if(HYPRDICTATE_BUILD_DAEMON)
+    find_package(tomlplusplus 3.3 QUIET CONFIG)
+    if(NOT tomlplusplus_FOUND)
+        message(STATUS "hyprdictate: tomlplusplus not found, fetching")
+        FetchContent_Declare(
+            hyprdictate_tomlplusplus
+            GIT_REPOSITORY https://github.com/marzer/tomlplusplus.git
+            GIT_TAG        v3.4.0
+            GIT_SHALLOW    TRUE
+        )
+        FetchContent_MakeAvailable(hyprdictate_tomlplusplus)
+    endif()
 endif()
 
-# --- spdlog ---
+# --- spdlog (daemon + plugin) ---
 #
 # 1.13.0 gets us std::format-backed formatters and drops the older
 # fmt-headers-only workaround. spdlog::spdlog remains the canonical
-# target regardless of source.
-find_package(spdlog 1.12 QUIET CONFIG)
-if(NOT spdlog_FOUND)
-    message(STATUS "hyprdictate: spdlog not found, fetching")
-    FetchContent_Declare(
-        hyprdictate_spdlog
-        GIT_REPOSITORY https://github.com/gabime/spdlog.git
-        GIT_TAG        v1.13.0
-        GIT_SHALLOW    TRUE
-    )
-    set(SPDLOG_BUILD_EXAMPLE OFF CACHE INTERNAL "")
-    set(SPDLOG_BUILD_TESTS   OFF CACHE INTERNAL "")
-    FetchContent_MakeAvailable(hyprdictate_spdlog)
+# target regardless of source. Only needed by the daemon and the
+# plugin; the CLI logs to stderr directly and doesn't link spdlog.
+if(HYPRDICTATE_BUILD_DAEMON OR HYPRDICTATE_BUILD_PLUGIN)
+    find_package(spdlog 1.12 QUIET CONFIG)
+    if(NOT spdlog_FOUND)
+        message(STATUS "hyprdictate: spdlog not found, fetching")
+        FetchContent_Declare(
+            hyprdictate_spdlog
+            GIT_REPOSITORY https://github.com/gabime/spdlog.git
+            GIT_TAG        v1.13.0
+            GIT_SHALLOW    TRUE
+        )
+        set(SPDLOG_BUILD_EXAMPLE OFF CACHE INTERNAL "")
+        set(SPDLOG_BUILD_TESTS   OFF CACHE INTERNAL "")
+        FetchContent_MakeAvailable(hyprdictate_spdlog)
+    endif()
 endif()
 
 # --- CLI11 ---
