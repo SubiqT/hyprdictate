@@ -24,6 +24,7 @@
 
 #include "audio.hpp"
 #include "config.hpp"
+#include "inject.hpp"
 #include "ipc.hpp"
 #include "log.hpp"
 #include "session.hpp"
@@ -137,17 +138,20 @@ int main(int argc, char** argv) {
     // isn't a hazard here.
     std::unique_ptr<hyprdictate::IpcServer> ipc;
 
+    hyprdictate::WtypeInjector injector;
+
     hyprdictate::Session session(
         *audio,
         *engine,
         [&ipc](const hyprdictate::Event& e) {
             if (ipc) ipc->broadcast(e);
         },
-        // Injector: wired in the next commit. For now, log the
-        // transcript so the flow is observable end-to-end.
-        [](const std::string& text,
-           const std::optional<hyprdictate::WindowContext>& /*window*/) {
-            spdlog::info("transcript ready ({} chars): {}", text.size(), text);
+        // Text injection via wtype. Runs on the worker thread that
+        // Session launched for transcription, so a slow wtype exec
+        // does not block the IPC loop.
+        [&injector](const std::string&                                  text,
+                    const std::optional<hyprdictate::WindowContext>&    window) {
+            injector.inject(text, window);
         });
 
     const std::filesystem::path socket_path =
