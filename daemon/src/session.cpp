@@ -63,7 +63,6 @@ namespace hyprdictate {
 
             case State::Recording: {
                 auto pcm = m_audio.stop();
-                setState(State::Transcribing);
                 startTranscription(std::move(pcm));
                 return std::nullopt;
             }
@@ -106,7 +105,6 @@ namespace hyprdictate {
         }
 
         auto pcm = m_audio.stop();
-        setState(State::Transcribing);
         startTranscription(std::move(pcm));
         return std::nullopt;
     }
@@ -159,7 +157,12 @@ namespace hyprdictate {
     }
 
     void Session::startTranscription(std::vector<float> pcm) {
-        emitStateEvent();  // Transcribing
+        // Transition to Transcribing here rather than in each caller
+        // (handleToggle, handleStop). Callers hold m_mutex over the
+        // whole state change, so setState-under-lock is safe, and
+        // there's exactly one StateChanged event on the wire per
+        // recording end.
+        setState(State::Transcribing);
 
         // Compose the initial_prompt on the current thread so the
         // supplier sees the same m_window value the caller just
