@@ -41,11 +41,19 @@ add_subdirectory(shared)
 add_subdirectory(daemon)
 add_subdirectory(cli)
 
-# The user-service unit is a plain file install; no target needs to
-# depend on it and no configure-time substitution happens today.
-# CMAKE_INSTALL_LIBDIR would place this under lib/, but user units
-# live under lib/systemd/user on every distro we target.
+# Substitute the absolute installed daemon path into the systemd
+# user unit at configure time so `cmake --install` produces a unit
+# non-Nix installers can activate without hand-editing ExecStart.
+# The Nix module ignores this file and synthesises its own unit
+# targeting the wrapped store path.
+include(GNUInstallDirs)
+set(HYPRDICTATE_DAEMON_PATH "${CMAKE_INSTALL_FULL_BINDIR}/hyprdictated")
+configure_file(
+    ${CMAKE_CURRENT_SOURCE_DIR}/contrib/systemd/hyprdictate.service.in
+    ${CMAKE_CURRENT_BINARY_DIR}/contrib/systemd/hyprdictate.service
+    @ONLY
+)
 install(
-    FILES contrib/systemd/hyprdictate.service
+    FILES ${CMAKE_CURRENT_BINARY_DIR}/contrib/systemd/hyprdictate.service
     DESTINATION lib/systemd/user
 )

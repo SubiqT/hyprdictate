@@ -1,3 +1,13 @@
+# This is a CMake-substituted template. `cmake --install` writes a
+# concrete hyprdictate.service into $CMAKE_INSTALL_FULL_DATADIR/../
+# systemd/user/ with @HYPRDICTATE_DAEMON_PATH@ resolved to the
+# absolute installed hyprdictated path. Non-Nix installers pick that
+# unit up with `systemctl --user daemon-reload`.
+#
+# NixOS consumers do not use this unit directly. The nix-config
+# module synthesises its own systemd.user.services.hyprdictate entry
+# with ExecStart pointing at the wrapped store path, so PATH-based
+# lookup for `wtype` (added by makeWrapper) stays effective.
 [Unit]
 Description=hyprdictate voice dictation daemon
 Documentation=https://github.com/SubiqT/hyprdictate
@@ -11,10 +21,9 @@ After=graphical-session.target pipewire.service
 
 [Service]
 Type=simple
-# %h expands to $HOME. The daemon prefers $XDG_CONFIG_HOME (respected
-# through its own resolution logic) but the unit gives an explicit
-# fallback so a service without XDG_CONFIG_HOME set still boots.
-ExecStart=hyprdictated --config %h/.config/hyprdictate/config.toml
+# @HYPRDICTATE_DAEMON_PATH@ is substituted by CMake to the absolute
+# path of the installed daemon. %h expands to $HOME.
+ExecStart=@HYPRDICTATE_DAEMON_PATH@ --config %h/.config/hyprdictate/config.toml
 
 # Restart on unexpected exit but leave a small backoff so a bad
 # config that fails config load doesn't hammer the journal.
