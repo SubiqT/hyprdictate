@@ -78,7 +78,9 @@ namespace hyprdictate {
     // Events flow from daemon to subscribed clients. StateChanged is
     // broadcast; Transcript is broadcast (the plugin uses it, the CLI
     // ignores it); StatusReply is unicast to whoever asked for status;
-    // Error carries structured failure to the requesting client.
+    // Error carries structured failure to the requesting client;
+    // Level is a high-rate broadcast of the current recording's
+    // audio envelope, used by the widget to draw a live meter.
     namespace event {
         struct StateChanged { State value; };
         struct Transcript   { std::string text; };
@@ -87,13 +89,20 @@ namespace hyprdictate {
             std::optional<std::string>  model_path;
         };
         struct Error        { std::string message; };
+        // Normalised audio level in [0, 1] on a dB-mapped scale.
+        // Emitted by the daemon at ~20 Hz while state == Recording;
+        // no Level events fire in any other state. Consumers with
+        // no interest in metering ignore the event; unknown events
+        // are dropped safely by parseEvent's dispatcher.
+        struct Level        { float value; };
     }
 
     using Event = std::variant<
         event::StateChanged,
         event::Transcript,
         event::StatusReply,
-        event::Error
+        event::Error,
+        event::Level
     >;
 
     // Thrown by parseCommand/parseEvent on malformed input. Callers

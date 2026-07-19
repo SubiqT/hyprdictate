@@ -101,6 +101,12 @@ namespace hyprdictate {
                     {"message", x.message},
                 };
             },
+            [](const event::Level& x) -> json {
+                return {
+                    {"event", "level"},
+                    {"value", x.value},
+                };
+            },
         }, e);
     }
 
@@ -184,6 +190,12 @@ namespace hyprdictate {
             if (j.contains("message") && j["message"].is_string())
                 msg = j["message"].get<std::string>();
             return event::Error{ .message = std::move(msg) };
+        }
+        if (ev == "level") {
+            float v = 0.0f;
+            if (j.contains("value") && j["value"].is_number())
+                v = j["value"].get<float>();
+            return event::Level{ .value = v };
         }
 
         throw ProtocolError("unknown event: " + ev);
