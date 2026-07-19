@@ -39,12 +39,13 @@ namespace {
             hyprdictate::g_plugin.indicator->stopRecording();
         }
 
-        // Clear the captured window on any terminal transition so a
-        // stale PHLWINDOWREF doesn't drift into the next recording.
-        // The Recording→Transcribing edge keeps it so the injector
-        // still has the target when the transcript arrives.
-        if (s == hyprdictate::State::Idle ||
-            s == hyprdictate::State::Error ||
+        // Clear the captured window on Error/Cancelled only. Idle
+        // arrives immediately before the transcript event on the
+        // happy path — resetting on Idle would drop injection every
+        // time. On Idle we keep the ref alive so the injector can
+        // still resolve it; the next Recording edge will overwrite
+        // targetWindow via captureFocusedWindow anyway.
+        if (s == hyprdictate::State::Error ||
             s == hyprdictate::State::Cancelled) {
             hyprdictate::g_plugin.targetWindow.reset();
         }
