@@ -19,6 +19,7 @@
 #include <CLI/CLI.hpp>
 #include <spdlog/spdlog.h>
 
+#include "audio.hpp"
 #include "config.hpp"
 #include "log.hpp"
 #include "whisper_engine.hpp"
@@ -95,9 +96,24 @@ int main(int argc, char** argv) {
         return 3;
     }
 
-    // M1 skeleton exit: later commits install the audio thread, IPC
-    // server, and toggle state machine here, then block until a
-    // signal handler flips the shutdown flag.
-    spdlog::info("model resident; runtime wiring lands in later commits");
+    // PipeWire connect happens next so a missing session-daemon or a
+    // permission issue on the audio graph produces its diagnostic
+    // before the socket listener opens and starts accepting toggle
+    // commands the daemon can't fulfil.
+    std::unique_ptr<hyprdictate::AudioCapture> audio;
+    try {
+        audio = std::make_unique<hyprdictate::AudioCapture>();
+    } catch (const hyprdictate::AudioError& e) {
+        spdlog::error("audio capture setup failed: {}", e.what());
+        return 4;
+    } catch (const std::exception& e) {
+        spdlog::error("unexpected error initialising audio: {}", e.what());
+        return 4;
+    }
+
+    // M1 skeleton exit: later commits install the IPC server and
+    // toggle state machine here, then block until a signal handler
+    // flips the shutdown flag.
+    spdlog::info("audio + model resident; runtime wiring lands in later commits");
     return 0;
 }

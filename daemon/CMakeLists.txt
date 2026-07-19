@@ -11,9 +11,16 @@
 # - toml++ for config
 # - spdlog for logging
 # - hyprdictate::shared for the wire protocol types
-# - whisper.cpp (via find_package or the .pc file nixpkgs ships)
+# - whisper.cpp for inference
+# - libpipewire-0.3 for audio capture
 
 find_package(PkgConfig REQUIRED)
+
+# PipeWire ships pkg-config only; no CMake config. libpipewire-0.3 is
+# the ABI Ubuntu/Debian, Fedora, and NixOS all agree on today; if the
+# repository sees a 1.x-era libpipewire-1.0 we'll bump the module
+# name here.
+pkg_check_modules(PIPEWIRE REQUIRED IMPORTED_TARGET libpipewire-0.3)
 
 # whisper.cpp installs both a CMake config (`whisper-config.cmake`) and
 # a pkg-config file (whisper.pc), depending on how it's built.
@@ -32,6 +39,7 @@ add_executable(hyprdictated
     src/main.cpp
     src/config.cpp
     src/whisper_engine.cpp
+    src/audio.cpp
 )
 
 target_include_directories(hyprdictated PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
@@ -43,6 +51,7 @@ target_link_libraries(hyprdictated
         spdlog::spdlog
         CLI11::CLI11
         whisper
+        PkgConfig::PIPEWIRE
 )
 
 install(TARGETS hyprdictated RUNTIME)
