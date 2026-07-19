@@ -40,3 +40,12 @@ include(cmake/deps.cmake)
 add_subdirectory(shared)
 add_subdirectory(daemon)
 add_subdirectory(cli)
+
+# The user-service unit is a plain file install; no target needs to
+# depend on it and no configure-time substitution happens today.
+# CMAKE_INSTALL_LIBDIR would place this under lib/, but user units
+# live under lib/systemd/user on every distro we target.
+install(
+    FILES contrib/systemd/hyprdictate.service
+    DESTINATION lib/systemd/user
+)

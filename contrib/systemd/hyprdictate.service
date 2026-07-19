@@ -1,0 +1,38 @@
+[Unit]
+Description=hyprdictate voice dictation daemon
+Documentation=https://github.com/SubiqT/hyprdictate
+# Bind to the graphical session so the daemon starts alongside
+# Hyprland and PipeWire, and stops cleanly on logout. Users running
+# hyprdictate outside a graphical session (e.g. a bare wayland
+# compositor session for testing) can override with `systemctl
+# --user edit hyprdictate.service`.
+PartOf=graphical-session.target
+After=graphical-session.target pipewire.service
+
+[Service]
+Type=simple
+# %h expands to $HOME. The daemon prefers $XDG_CONFIG_HOME (respected
+# through its own resolution logic) but the unit gives an explicit
+# fallback so a service without XDG_CONFIG_HOME set still boots.
+ExecStart=hyprdictated --config %h/.config/hyprdictate/config.toml
+
+# Restart on unexpected exit but leave a small backoff so a bad
+# config that fails config load doesn't hammer the journal.
+Restart=on-failure
+RestartSec=2s
+
+# Kill the daemon and its subprocesses (whisper worker threads,
+# wtype subprocesses) as a group on stop so a wtype hung on a
+# missing Wayland display doesn't outlive the service.
+KillMode=mixed
+TimeoutStopSec=5s
+
+# Environment variables the daemon or its subprocesses read:
+# - WAYLAND_DISPLAY and XDG_RUNTIME_DIR are inherited from the user
+#   session (systemd --user propagates them by default).
+# - HYPRDICTATE_LOG_LEVEL overrides the daemon's default INFO level.
+# Uncomment to crank verbosity when triaging a failed capture:
+# Environment=HYPRDICTATE_LOG_LEVEL=debug
+
+[Install]
+WantedBy=graphical-session.target
