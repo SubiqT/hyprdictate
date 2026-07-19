@@ -1,37 +1,64 @@
 {
-  description = "hyprdictate — voice dictation daemon for Hyprland";
+  description = "hyprdictate — voice dictation daemon and Hyprland plugin";
 
-  # M1 does not depend on Hyprland: the daemon and the CLI build
-  # against plain nixpkgs. The plugin half arrives in M2 with a
-  # separate hyprland input and its own package output.
+  # Hyprland is pinned to v0.55.4 to match hyprwsmode, so a nix-config
+  # that consumes both plugins can share one hyprland input via
+  # `inputs.hyprdictate.inputs.hyprland.follows = "hyprland"` without
+  # a version divergence. `submodules=1` is required because Hyprland
+  # vendors hyprland-protocols, udis86, and tracy as submodules.
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
+    hyprland.url = "git+https://github.com/hyprwm/Hyprland?submodules=1&ref=v0.55.4";
   };
 
-  outputs = { self, nixpkgs, ... }:
+  outputs = { self, nixpkgs, hyprland, ... }:
     let
-      # Match the systems Hyprland itself builds for so the M2 plugin
-      # output slots in without a system-list divergence.
-      supportedSystems = [ "x86_64-linux" "aarch64-linux" ];
-
+      # Iterate the same systems Hyprland itself builds for so the
+      # plugin output's system attribute set matches hyprland's
+      # exactly. Today that is x86_64-linux and aarch64-linux via
+      # hyprland.inputs.systems.
       forAllSystems = fn:
-        nixpkgs.lib.genAttrs supportedSystems
+        nixpkgs.lib.genAttrs
+          (builtins.attrNames hyprland.packages)
           (system: fn system nixpkgs.legacyPackages.${system});
     in
     {
       packages = forAllSystems (system: pkgs: rec {
-        # Single derivation builds both `hyprdictated` (daemon) and
-        # `hyprdictate` (CLI). Consumers pick either by referencing
-        # ${hyprdictate}/bin/hyprdictated or /bin/hyprdictate.
-        hyprdictate = pkgs.callPackage ./default.nix { };
+        # Daemon binary + systemd unit. Runtime deps: whisper-cpp,
+        # pipewire, wtype (via makeWrapper on PATH).
+        daemon = pkgs.callPackage ./default.nix {
+          component = "daemon";
+        };
 
-        default = hyprdictate;
+        # CLI client. Runtime deps: none beyond the standard C++
+        # runtime — the CLI links only nlohmann_json + CLI11 + POSIX
+        # sockets.
+        cli = pkgs.callPackage ./default.nix {
+          component = "cli";
+        };
+
+        # Compositor plugin. Built with Hyprland's stdenv against the
+        # pinned Hyprland source so ABI matches.
+        plugin = pkgs.callPackage ./plugin.nix {
+          hyprland = hyprland.packages.${system}.hyprland;
+        };
+
+        # symlinkJoin so a consumer that wants everything in one
+        # closure can reference `hyprdictate.packages.${system}.default`.
+        # Component derivations remain individually addressable.
+        default = pkgs.symlinkJoin {
+          name    = "hyprdictate";
+          paths   = [ daemon cli plugin ];
+        };
       });
 
-      # Convenience dev shell so `nix develop` gives a working build
-      # environment with all deps and clangd support.
+      # Dev shell with every dep on the search path so `nix develop`
+      # gives a working build environment with clangd support. Uses
+      # hyprland.stdenv so the shell can compile the plugin too.
       devShells = forAllSystems (system: pkgs: {
-        default = pkgs.mkShell {
+        default = pkgs.mkShell.override {
+          stdenv = hyprland.packages.${system}.hyprland.stdenv;
+        } {
           name = "hyprdictate";
           nativeBuildInputs = [
             pkgs.cmake
@@ -48,7 +75,9 @@
             pkgs.whisper-cpp
             pkgs.pipewire
             pkgs.wtype
-          ];
+            pkgs.lua5_5
+            hyprland.packages.${system}.hyprland.dev
+          ] ++ hyprland.packages.${system}.hyprland.buildInputs;
         };
       });
     };
