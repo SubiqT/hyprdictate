@@ -78,6 +78,10 @@ endif()
 
 pkg_check_modules(PIPEWIRE REQUIRED IMPORTED_TARGET libpipewire-0.3)
 
+# hyprdictate::asio (header-only) via the shared module; the plugin
+# picks it up the same way from M2.2.
+include(${CMAKE_SOURCE_DIR}/cmake/hyprdictate_asio.cmake)
+
 find_package(whisper QUIET CONFIG)
 if(NOT whisper_FOUND)
     pkg_check_modules(WHISPER REQUIRED IMPORTED_TARGET whisper)
