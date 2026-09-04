@@ -4,51 +4,28 @@ namespace hyprdictate {
 
     namespace {
 
-        // Whisper's practical n_max_text_ctx for base-family models is
-        // around 224 tokens; leaving headroom for the initial padding
-        // and the segment being decoded, ~200 tokens is a safe cap.
-        // A crude 4-chars-per-token estimate gives ~800 characters.
-        constexpr std::size_t kMaxPromptChars = 800;
+        // Moonshine defaults to a maximum of 200 contextual terms. Keep the
+        // daemon-side list within that bound so an unexpectedly large config
+        // cannot dilute decoder accuracy.
+        constexpr std::size_t kMaxKeyterms = 200;
 
-        // Append one vocabulary term to the running prompt, separated
-        // from the previous term by a comma+space. Returns true when
-        // the term fit; false means the cap was reached and callers
-        // should stop appending.
-        bool tryAppend(std::string& out, std::string_view term) {
-            if (term.empty()) return true;
-
-            // "Term, " overhead — 2 extra chars unless this is the
-            // first entry. The cap is a soft ceiling; a slightly-
-            // over-budget prompt is still healthier for whisper than
-            // a mid-term truncation.
-            const std::size_t joiner = out.empty() ? 0 : 2;
-            if (out.size() + joiner + term.size() > kMaxPromptChars)
-                return false;
-
-            if (!out.empty())
-                out.append(", ");
+        void append(std::string& out, std::string_view term) {
+            if (term.empty()) return;
+            if (!out.empty()) out.push_back(',');
             out.append(term);
-            return true;
         }
 
     }
 
-    std::string composePrompt(const Config::Vocabulary&           voc,
-                              const std::optional<WindowContext>& /*window*/) {
-        std::string prompt;
+    std::string composeKeyterms(const Config::Vocabulary&           voc,
+                                const std::optional<WindowContext>& /*window*/) {
+        std::string keyterms;
 
-        // Layer 1: global vocabulary.
-        for (const auto& term : voc.global) {
-            if (!tryAppend(prompt, term))
-                break;
-        }
+        for (std::size_t i = 0; i < voc.global.size() && i < kMaxKeyterms; ++i)
+            append(keyterms, voc.global[i]);
 
-        // Layer 2 (per_class) and Layer 3 (title tokens) land in M4.
-        // The window context parameter is threaded through today so
-        // the caller in session.cpp doesn't need to change when those
-        // layers arrive.
-
-        return prompt;
+        // Per-class and title-derived keyterms can be layered here later.
+        return keyterms;
     }
 
 }

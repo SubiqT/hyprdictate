@@ -84,6 +84,7 @@ namespace hyprdictate {
                 return {
                     {"event", "transcript"},
                     {"text",  x.text},
+                    {"final", x.final},
                 };
             },
             [](const event::StatusReply& x) -> json {
@@ -166,7 +167,13 @@ namespace hyprdictate {
         if (ev == "transcript") {
             if (!j.contains("text") || !j["text"].is_string())
                 throw ProtocolError("transcript event missing 'text'");
-            return event::Transcript{ .text = j["text"].get<std::string>() };
+            bool final = true;
+            if (j.contains("final") && j["final"].is_boolean())
+                final = j["final"].get<bool>();
+            return event::Transcript{
+                .text  = j["text"].get<std::string>(),
+                .final = final,
+            };
         }
         if (ev == "status") {
             State s = State::Idle;

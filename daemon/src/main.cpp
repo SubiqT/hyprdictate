@@ -2,7 +2,7 @@
 //
 // Wires:
 //   config      — TOML at $XDG_CONFIG_HOME/hyprdictate/config.toml
-//   whisper     — resident model loaded on startup
+//   moonshine   — resident streaming model loaded on startup
 //   audio       — PipeWire capture into an in-memory buffer
 //   session     — state machine over the wire commands
 //   ipc         — asio unix-socket server carrying Commands and Events
@@ -29,7 +29,7 @@
 #include "log.hpp"
 #include "session.hpp"
 #include "vocabulary.hpp"
-#include "whisper_engine.hpp"
+#include "moonshine_engine.hpp"
 
 namespace {
 
@@ -93,20 +93,22 @@ int main(int argc, char** argv) {
     spdlog::info("model_path = {}", config.model_path.string());
     spdlog::info("language   = {}", config.language);
 
-    // Load the whisper model up front. Failing here is fatal for the
-    // daemon: without an engine there's nothing useful to run.
-    std::unique_ptr<hyprdictate::WhisperEngine> engine;
+    if (config.language != "en") {
+        spdlog::error("Moonshine streaming backend currently supports language=en only");
+        return 3;
+    }
+
+    std::unique_ptr<hyprdictate::MoonshineEngine> engine;
     try {
-        engine = std::make_unique<hyprdictate::WhisperEngine>(
+        engine = std::make_unique<hyprdictate::MoonshineEngine>(
             config.model_path,
-            config.whisper,
-            config.language,
-            config.threads);
-    } catch (const hyprdictate::WhisperError& e) {
-        spdlog::error("whisper engine failed to load: {}", e.what());
+            config.model_arch,
+            config.update_interval_ms);
+    } catch (const hyprdictate::TranscriptionError& e) {
+        spdlog::error("Moonshine engine failed to load: {}", e.what());
         return 3;
     } catch (const std::exception& e) {
-        spdlog::error("unexpected error initialising whisper: {}", e.what());
+        spdlog::error("unexpected error initialising Moonshine: {}", e.what());
         return 3;
     }
 
@@ -125,12 +127,10 @@ int main(int argc, char** argv) {
         return 4;
     }
 
-    // The daemon's event loop is a single-threaded asio io_context.
-    // All socket I/O and command dispatch runs on this thread; the
-    // only off-thread work is the PipeWire process callback (on its
-    // own thread_loop) and per-utterance whisper worker threads
-    // launched from Session::startTranscription. Both hand back to
-    // the io_context via asio::post before touching connection state.
+    // Socket I/O and commands run on this io_context. PipeWire delivers
+    // lightweight audio chunks on its own thread; Moonshine polls partials
+    // on a dedicated worker, and Session drains the final transcript off the
+    // IPC thread.
     asio::io_context io;
 
     // The IPC server is constructed before the Session so the Session
@@ -160,11 +160,10 @@ int main(int argc, char** argv) {
                     const std::optional<hyprdictate::WindowContext>&    window) {
             injector.inject(text, window);
         },
-        // Initial-prompt supplier: layer 1 (global vocabulary) only
-        // for M1. Layers 2 and 3 (per-class and title-token) plug in
-        // through the same callback signature in M4.
+        // Moonshine contextual keyterms. The existing comma-separated
+        // vocabulary composer maps directly onto its biasing API.
         [&config](const std::optional<hyprdictate::WindowContext>& window) {
-            return hyprdictate::composePrompt(config.vocabulary, window);
+            return hyprdictate::composeKeyterms(config.vocabulary, window);
         });
 
     const std::filesystem::path socket_path =

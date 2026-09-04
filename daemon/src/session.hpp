@@ -1,69 +1,41 @@
 #pragma once
 
-// Session coordinates the daemon's stateful pieces (audio capture,
-// whisper inference, injection hook) around the wire commands and
-// emits protocol events to subscribers.
-//
-// Threading model:
-//   - Commands arrive from the IPC server, running on the asio
-//     io_context thread. They mutate state under m_mutex and either
-//     return synchronously (Status, Cancel), or hand off to a worker.
-//   - Transcription runs on a detached std::thread per utterance.
-//     Whisper inference is CPU-bound and would block the IPC loop
-//     otherwise. On completion the worker calls back via
-//     completeTranscription(), which reacquires the mutex, emits the
-//     transcript event, and transitions back to Idle.
-//   - The event emitter callback is expected to be thread-safe (the
-//     IPC server implementation posts writes through its io_context).
-
 #include <atomic>
+#include <cstdint>
 #include <functional>
 #include <mutex>
 #include <optional>
 #include <string>
+#include <thread>
 
+#include "audio.hpp"
 #include "hyprdictate/protocol.hpp"
 #include "hyprdictate/state.hpp"
+#include "transcription_engine.hpp"
 
 namespace hyprdictate {
-
-    class AudioCapture;
-    class WhisperEngine;
 
     class Session {
     public:
         using EventEmitter = std::function<void(const Event&)>;
-        using Injector    = std::function<void(const std::string&, const std::optional<WindowContext>&)>;
+        using Injector = std::function<void(const std::string&,
+                                            const std::optional<WindowContext>&)>;
         using PromptSupplier = std::function<std::string(const std::optional<WindowContext>&)>;
 
-        // audio and whisper are borrowed; the caller (main.cpp) owns
-        // their lifetime and outlives Session. emitter is invoked
-        // whenever the session broadcasts an event (state change,
-        // transcript, error); injector receives the final transcript
-        // and the recording's start-time window context; promptSupplier
-        // produces the initial_prompt used for the utterance based on
-        // the same window context (typically pulls from the config's
-        // vocabulary section).
-        Session(AudioCapture&    audio,
-                WhisperEngine&   whisper,
-                EventEmitter     emitter,
-                Injector         injector,
-                PromptSupplier   promptSupplier);
+        Session(AudioSource&         audio,
+                TranscriptionEngine& transcription,
+                EventEmitter         emitter,
+                Injector             injector,
+                PromptSupplier       promptSupplier);
         ~Session();
 
         Session(const Session&)            = delete;
         Session& operator=(const Session&) = delete;
 
-        // Dispatch a wire command. Returns any per-command reply that
-        // should be unicast to the requester (Status). Events that
-        // fan out to every subscriber are pushed through the emitter
-        // rather than returned here.
         std::optional<Event> handle(const Command& cmd);
-
         State state() const noexcept { return m_state.load(std::memory_order_acquire); }
 
     private:
-        // Command handlers. All run under m_mutex.
         std::optional<Event> handleToggle(const std::optional<WindowContext>& window);
         std::optional<Event> handleStart(const std::optional<WindowContext>& window);
         std::optional<Event> handleStop();
@@ -72,48 +44,29 @@ namespace hyprdictate {
         std::optional<Event> handleReload();
         std::optional<Event> handleIdentify(const std::string& role);
 
-        // Kick off whisper on a worker thread with the current PCM
-        // and window context. The worker calls completeTranscription
-        // on the way out.
-        void startTranscription(std::vector<float> pcm);
-        void completeTranscription(std::string text);
-        void failTranscription(std::string reason);
+        void beginRecording(const std::optional<WindowContext>& window);
+        void startFinalization();
+        void completeTranscription(std::uint64_t generation, std::string text);
+        void failTranscription(std::uint64_t generation, std::string reason);
+        void emitPartial(std::uint64_t generation, const std::string& text);
+        void emitStreamingError(std::uint64_t generation, const std::string& reason);
 
-        void setState(State s);
+        void setState(State state);
         void emitStateEvent();
 
-        AudioCapture&  m_audio;
-        WhisperEngine& m_whisper;
-        EventEmitter   m_emitter;
-        Injector       m_injector;
-        PromptSupplier m_promptSupplier;
+        AudioSource&         m_audio;
+        TranscriptionEngine& m_transcription;
+        EventEmitter         m_emitter;
+        Injector             m_injector;
+        PromptSupplier       m_promptSupplier;
 
         mutable std::mutex m_mutex;
         std::atomic<State> m_state{State::Idle};
+        std::jthread       m_finishWorker;
+        std::uint64_t      m_generation = 0;
 
-        // Window context captured at start time. Preserved across the
-        // recording so the design-doc's `inject_focus = "start"` path
-        // uses the original window even if focus has drifted by the
-        // time transcription completes.
         std::optional<WindowContext> m_window;
-
-        // Injection ownership for the current recording.
-        //
-        // Set at the Idle→Recording edge based on whether the
-        // starting command carried a window context. Presence of a
-        // window = the client (in practice, the Hyprland plugin)
-        // committed to a specific target and will inject through
-        // wlr_virtual_keyboard_v1 when the transcript arrives.
-        // Absence of a window = anonymous/CLI recording; the daemon
-        // must fall back to wtype.
-        //
-        // Gating on this per-recording flag rather than on "is any
-        // plugin currently connected" lets both flows coexist in
-        // one session: `hyprdictate toggle` from a shell still types
-        // via wtype even while the plugin is loaded, since the
-        // plugin didn't originate that recording and its dispatcher
-        // never captured a target for it.
-        bool m_clientOwnsInjection = false;
+        bool                         m_clientOwnsInjection = false;
     };
 
 }

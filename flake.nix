@@ -8,7 +8,7 @@
   # vendors hyprland-protocols, udis86, and tracy as submodules.
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
-    hyprland.url = "git+https://github.com/hyprwm/Hyprland?submodules=1&ref=v0.55.4";
+    hyprland.url = "git+https://github.com/hyprwm/Hyprland?submodules=1&ref=refs/tags/v0.55.4";
   };
 
   outputs = { self, nixpkgs, hyprland, ... }:
@@ -24,10 +24,15 @@
     in
     {
       packages = forAllSystems (system: pkgs: rec {
-        # Daemon binary + systemd unit. Runtime deps: whisper-cpp,
-        # pipewire, wtype (via makeWrapper on PATH).
+        moonshine-voice = pkgs.callPackage ./nix/moonshine-voice.nix { };
+        moonshine-model-medium-en =
+          pkgs.callPackage ./nix/moonshine-model-medium-en.nix { };
+
+        # Daemon binary + systemd unit. Runtime deps: Moonshine Voice,
+        # PipeWire, and wtype (via makeWrapper on PATH).
         daemon = pkgs.callPackage ./default.nix {
           component = "daemon";
+          inherit moonshine-voice;
         };
 
         # CLI client. Runtime deps: none beyond the standard C++
@@ -72,7 +77,7 @@
             pkgs.nlohmann_json
             pkgs.spdlog
             pkgs.tomlplusplus
-            pkgs.whisper-cpp
+            self.packages.${system}.moonshine-voice
             pkgs.pipewire
             pkgs.wtype
             pkgs.lua5_5

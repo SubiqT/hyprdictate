@@ -18,14 +18,15 @@ namespace hyprdictate {
     struct Config {
         enum class InjectFocus  { Start, End };
         enum class InjectMethod { WlrKeyboard, Wtype };
+        enum class ModelArch    { TinyStreaming, SmallStreaming, MediumStreaming };
 
+        // Moonshine streaming models are directories containing the ORT model
+        // components and tokenizer, rather than one GGML file.
         std::filesystem::path model_path;
-        std::string           language      = "en";
-        // 0 sentinels "let whisper pick threads based on hardware"; the
-        // engine wrapper resolves this against std::thread::
-        // hardware_concurrency at model-load time.
-        int                   threads       = 0;
-        InjectFocus           inject_focus  = InjectFocus::Start;
+        std::string           language           = "en";
+        ModelArch             model_arch         = ModelArch::MediumStreaming;
+        int                   update_interval_ms = 300;
+        InjectFocus           inject_focus       = InjectFocus::Start;
         // Design doc default is wlr_keyboard, but that path only exists
         // once the M2 plugin is loaded. On the standalone daemon (M1),
         // main() falls back to Wtype at runtime and logs the divergence
@@ -44,13 +45,6 @@ namespace hyprdictate {
             // per_class is deferred to M4; parsed but not stored here
             // until the map is actually consumed to avoid a dead field.
         } vocabulary;
-
-        struct WhisperParams {
-            float temperature                = 0.0f;
-            float no_speech_thold            = 0.6f;
-            bool  suppress_blank             = true;
-            bool  suppress_non_speech_tokens = true;
-        } whisper;
 
         // Load a config from disk.
         //

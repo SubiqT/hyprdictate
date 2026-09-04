@@ -34,9 +34,9 @@ namespace hyprdictate {
         // Callbacks the plugin registers before calling connect().
         // Every callback runs on Hyprland's main thread.
         struct Callbacks {
-            std::function<void(State)>             onState;
-            std::function<void(const std::string&)> onTranscript;
-            std::function<void(const std::string&)> onError;
+            std::function<void(State)>                    onState;
+            std::function<void(const std::string&, bool)> onTranscript;
+            std::function<void(const std::string&)>       onError;
         };
 
         // Ctor stores the callbacks. connect() actually opens the

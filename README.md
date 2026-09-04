@@ -1,126 +1,137 @@
 # hyprdictate
 
-Voice dictation daemon for Hyprland. Toggle a keybind, speak, get the
-transcript typed into the window you were focused on when you started.
+Voice dictation for Hyprland with on-device Moonshine streaming speech
+recognition. Press a keybind, see a live replaceable transcript in Noctalia,
+and press again to inject the finalized text into the window that was focused
+when recording began.
 
-M1 ships the standalone daemon (`hyprdictated`), a thin CLI
-(`hyprdictate`), and a systemd user unit. `hyprdictate toggle` records
-audio from PipeWire, runs whisper.cpp inference on the resulting PCM,
-and injects the transcript into the focused window via `wtype`.
+## Behaviour
 
-Hyprland plugin integration (border indicator, deterministic
-window-targeted injection via `wlr_virtual_keyboard_v1`) and the
-Noctalia widget arrive in later milestones and live in the same
-repository.
+- PipeWire supplies 16 kHz mono PCM directly to Moonshine while recording.
+- Partial transcripts are broadcast roughly every 300 ms and forwarded by the
+  Hyprland plugin to socket2 for live UI preview.
+- Partial text is **never typed into applications**. Moonshine may revise it.
+- Stopping drains the stream, emits one final transcript, and injects that final
+  text into the original target window.
+- Cancelling while recording discards the stream immediately. Cancelling while
+  the final drain is in progress marks the session cancelled and drops its
+  result when Moonshine returns.
+
+The repository contains the daemon (`hyprdictated`), CLI (`hyprdictate`), and
+Hyprland plugin. The sibling
+[`noctalia-hyprdictate`](https://github.com/SubiqT/noctalia-hyprdictate)
+repository renders the live preview.
 
 ## Requirements
 
-- Linux with PipeWire and a Wayland compositor
-- `whisper.cpp` (via `whisper-cpp` on NixOS / your distro's package)
-- `wtype` for M1 text injection
-- A GGML whisper model on disk (`ggml-base.en.bin` recommended for
-  latency; larger models trade throughput for accuracy)
+- Linux with PipeWire and Hyprland 0.55+
+- Moonshine Voice 0.1.5 (the Nix flake packages the pinned Linux runtime)
+- A Moonshine English streaming model directory
+- `wtype` for recordings started through the standalone CLI
 
-## Build
-
-### Nix flake
+## Nix build
 
 ```console
-$ nix build .#hyprdictate
-$ ./result/bin/hyprdictated --version
+nix build .#daemon
+nix build .#cli
+nix build .#plugin
+nix build .#moonshine-model-medium-en
 ```
 
-Consumers wire the flake into their nix-config as:
+The model output is the quantized English Medium Streaming model (245M
+parameters, about 257 MiB). It is pinned as eight fixed-output downloads and is
+under Moonshine's MIT model license.
+
+Consumers can use the packaged model directly in their generated TOML:
 
 ```nix
-{
-  inputs.hyprdictate.url = "github:SubiqT/hyprdictate";
-}
+model = inputs.hyprdictate.packages.${pkgs.system}.moonshine-model-medium-en;
+
+xdg.configFile."hyprdictate/config.toml".text = ''
+  model_path = "${model}"
+  model_arch = "medium-streaming"
+  language = "en"
+
+  [moonshine]
+  update_interval_ms = 300
+'';
 ```
 
-### Manual build
+The daemon and model are separate outputs so systems that provide their own
+model directory do not acquire the model closure automatically.
 
-Requires `cmake`, `pkg-config`, and the C++ dependencies on your
-system's include/link paths. The build resolves each dep via
-`find_package`/`pkg_check_modules` first and falls back to
-`FetchContent` for the header-only libraries.
+## Manual build
+
+CMake expects Moonshine's `moonshine-c-api.h` and `libmoonshine.so`, plus
+PipeWire, CLI11, toml++, spdlog, Asio, and nlohmann/json:
 
 ```console
-$ cmake -B build -DCMAKE_BUILD_TYPE=Release
-$ cmake --build build --parallel
-$ ./build/daemon/hyprdictated --version
-$ ./build/cli/hyprdictate --version
+cmake -S . -B build -GNinja
+cmake --build build
+ctest --test-dir build --output-on-failure
 ```
 
 ## Configuration
 
-The daemon reads `$XDG_CONFIG_HOME/hyprdictate/config.toml` (falling
-back to `~/.config/hyprdictate/config.toml`). Minimal M1 config:
-
 ```toml
-model_path = "~/.cache/hyprdictate/ggml-base.en.bin"
-language   = "en"
-threads    = 4
+model_path = "/path/to/medium-streaming-en"
+model_arch = "medium-streaming" # tiny-streaming | small-streaming | medium-streaming
+language = "en"
+inject_focus = "start"
+inject_method = "wtype"
+
+[moonshine]
+# Moonshine internally coalesces updates below 200 ms. Lower values are rejected.
+update_interval_ms = 300
 
 [vocabulary]
-global = ["Hyprland", "NixOS", "Wayland", "Noctalia"]
+# Applied through Moonshine's streaming keyterm biasing API.
+global = ["Hyprland", "NixOS", "Noctalia"]
+include_title_tokens = false
 
-[whisper]
-temperature      = 0.0
-no_speech_thold  = 0.6
-suppress_blank   = true
+[indicator]
+border = false
+border_color = "0xffff5555"
 ```
 
-Every schema key is documented in the code comments under
-`daemon/src/config.hpp`. Fields the current milestone does not yet
-consume (`indicator`, `inject_focus = "end"`, `vocabulary.per_class`)
-are parsed and stored, so a forward-looking config does not trip the
-M1 daemon.
+Only English streaming models are currently accepted. `model_path` must point
+to a directory containing the canonical Moonshine ORT assets and
+`tokenizer.bin`, not a Whisper GGML file.
 
 ## Running
 
-Under systemd (installed by the Nix module, or via the unit file in
-`contrib/systemd/`):
-
 ```console
-$ systemctl --user enable --now hyprdictate.service
-$ journalctl --user -u hyprdictate.service | tail
+hyprdictated --config ~/.config/hyprdictate/config.toml
+hyprdictate toggle
+hyprdictate cancel
+hyprdictate status
 ```
 
-Manually, for iterating on the config:
+Recommended Hyprland bindings through the compositor plugin:
 
-```console
-$ hyprdictated --config ~/.config/hyprdictate/config.toml
+```lua
+hl.bind("SUPER + H",         function() return hl.plugin.hyprdictate.toggle() end)
+hl.bind("SUPER + SHIFT + H", function() return hl.plugin.hyprdictate.cancel() end)
 ```
 
-Then bind a keybind in your Hyprland config:
+Plugin-started recordings capture the focused window and use deterministic
+plugin-side injection. CLI-started recordings have no captured compositor
+window and fall back to daemon-side `wtype`.
 
-```
-bind = SUPER, H, exec, hyprdictate toggle
-bind = SUPER SHIFT, H, exec, hyprdictate cancel
-```
+## Wire protocol
 
-## CLI
+Transcript events are line-delimited JSON:
 
-```console
-$ hyprdictate toggle          # start / stop dictation
-$ hyprdictate cancel          # discard an in-flight recording
-$ hyprdictate status          # print daemon state as JSON
-$ hyprdictate reload          # (M4) reload config without restart
+```json
+{"event":"transcript","text":"replaceable preview","final":false}
+{"event":"transcript","text":"final text","final":true}
 ```
 
-## Roadmap
-
-- **M1 — this milestone.** Standalone daemon, wtype injection,
-  vocabulary layer 1 (global).
-- **M2.** Hyprland plugin: dispatchers, plugin-side injection via
-  `wlr_virtual_keyboard_v1`, per-window border indicator,
-  Socket2 event emission, per-class vocabulary.
-- **M3.** Noctalia widget in a sibling repo
-  (`SubiqT/noctalia-hyprdictate`).
-- **M4.** PTT (push-to-talk), `inject_focus = "end"`, title-token
-  vocabulary, config reload, model auto-download on first run.
+Clients parsing older events that omit `final` treat them as final for rolling
+upgrade compatibility. The plugin forwards text onto Hyprland socket2 as a
+JSON string so punctuation and newlines cannot corrupt its line protocol.
 
 ## Licence
 
-MIT — see LICENSE.
+MIT. See [LICENSE](LICENSE). Moonshine's English models and runtime are also
+MIT-licensed.

@@ -37,6 +37,14 @@ namespace hyprdictate {
             return Config::InjectMethod::WlrKeyboard;
         }
 
+        Config::ModelArch parseModelArch(std::string_view s) {
+            if (s == "tiny-streaming")   return Config::ModelArch::TinyStreaming;
+            if (s == "small-streaming")  return Config::ModelArch::SmallStreaming;
+            if (s == "medium-streaming") return Config::ModelArch::MediumStreaming;
+            throw ConfigError("unsupported model_arch '" + std::string{s}
+                              + "' (expected tiny-streaming, small-streaming, or medium-streaming)");
+        }
+
         fs::path resolveConfigPath(std::optional<fs::path> explicit_path) {
             if (explicit_path)
                 return *explicit_path;
@@ -84,8 +92,16 @@ namespace hyprdictate {
         if (auto v = tbl["language"].value<std::string>())
             c.language = *v;
 
-        if (auto v = tbl["threads"].value<int64_t>())
-            c.threads = static_cast<int>(*v);
+        if (auto v = tbl["model_arch"].value<std::string>())
+            c.model_arch = parseModelArch(*v);
+
+        if (auto moonshine = tbl["moonshine"].as_table()) {
+            if (auto v = (*moonshine)["update_interval_ms"].value<int64_t>())
+                c.update_interval_ms = static_cast<int>(*v);
+        }
+
+        if (c.update_interval_ms < 200)
+            throw ConfigError("moonshine.update_interval_ms must be at least 200");
 
         if (auto v = tbl["inject_focus"].value<std::string>())
             c.inject_focus = parseInjectFocus(*v);
@@ -109,17 +125,6 @@ namespace hyprdictate {
             }
             if (auto v = (*voc)["include_title_tokens"].value<bool>())
                 c.vocabulary.include_title_tokens = *v;
-        }
-
-        if (auto w = tbl["whisper"].as_table()) {
-            if (auto v = (*w)["temperature"].value<double>())
-                c.whisper.temperature = static_cast<float>(*v);
-            if (auto v = (*w)["no_speech_thold"].value<double>())
-                c.whisper.no_speech_thold = static_cast<float>(*v);
-            if (auto v = (*w)["suppress_blank"].value<bool>())
-                c.whisper.suppress_blank = *v;
-            if (auto v = (*w)["suppress_non_speech_tokens"].value<bool>())
-                c.whisper.suppress_non_speech_tokens = *v;
         }
 
         if (c.model_path.empty()) {

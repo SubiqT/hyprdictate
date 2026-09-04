@@ -1,37 +1,39 @@
 #include "session.hpp"
 
 #include <thread>
+#include <type_traits>
 #include <utility>
 
 #include <spdlog/spdlog.h>
 
-#include "audio.hpp"
-#include "whisper_engine.hpp"
-
 namespace hyprdictate {
 
-    Session::Session(AudioCapture&    audio,
-                     WhisperEngine&   whisper,
-                     EventEmitter     emitter,
-                     Injector         injector,
-                     PromptSupplier   promptSupplier)
+    Session::Session(AudioSource&         audio,
+                     TranscriptionEngine& transcription,
+                     EventEmitter         emitter,
+                     Injector             injector,
+                     PromptSupplier       promptSupplier)
         : m_audio(audio)
-        , m_whisper(whisper)
+        , m_transcription(transcription)
         , m_emitter(std::move(emitter))
         , m_injector(std::move(injector))
         , m_promptSupplier(std::move(promptSupplier))
     {}
 
-    Session::~Session() = default;
+    Session::~Session() {
+        m_audio.cancel();
+        if (m_finishWorker.joinable())
+            m_finishWorker.join();
+        m_transcription.cancel();
+    }
 
     std::optional<Event> Session::handle(const Command& cmd) {
-        return std::visit([this](auto&& c) -> std::optional<Event> {
-            using T = std::decay_t<decltype(c)>;
-
+        return std::visit([this](auto&& command) -> std::optional<Event> {
+            using T = std::decay_t<decltype(command)>;
             if constexpr (std::is_same_v<T, command::Toggle>) {
                 return handleToggle(std::nullopt);
             } else if constexpr (std::is_same_v<T, command::Start>) {
-                return handleStart(c.window);
+                return handleStart(command.window);
             } else if constexpr (std::is_same_v<T, command::Stop>) {
                 return handleStop();
             } else if constexpr (std::is_same_v<T, command::Cancel>) {
@@ -41,181 +43,183 @@ namespace hyprdictate {
             } else if constexpr (std::is_same_v<T, command::Reload>) {
                 return handleReload();
             } else if constexpr (std::is_same_v<T, command::PttDown>) {
-                // PTT lands in M4; treat as `start` for now so PTT-
-                // configured keybinds don't break silently once the
-                // dispatcher is registered client-side.
-                return handleStart(c.window);
+                return handleStart(command.window);
             } else if constexpr (std::is_same_v<T, command::PttUp>) {
                 return handleStop();
             } else if constexpr (std::is_same_v<T, command::Identify>) {
-                return handleIdentify(c.role);
+                return handleIdentify(command.role);
             }
         }, cmd);
     }
 
-    std::optional<Event> Session::handleToggle(const std::optional<WindowContext>& window) {
-        std::lock_guard<std::mutex> guard(m_mutex);
-
+    std::optional<Event> Session::handleToggle(
+        const std::optional<WindowContext>& window) {
+        std::lock_guard lock(m_mutex);
         switch (m_state.load(std::memory_order_acquire)) {
             case State::Idle:
-                m_window                = window;
-                m_clientOwnsInjection   = window.has_value();
-                m_audio.start();
-                setState(State::Recording);
-                return std::nullopt;
-
-            case State::Recording: {
-                auto pcm = m_audio.stop();
-                startTranscription(std::move(pcm));
-                return std::nullopt;
-            }
-
+                beginRecording(window);
+                break;
+            case State::Recording:
+                startFinalization();
+                break;
             case State::Transcribing:
             case State::Error:
             case State::Cancelled:
-                // Toggle during transcribe / error / cancelled is a
-                // no-op. The user will see the state settle back to
-                // Idle in a beat and can toggle again then.
                 spdlog::debug("toggle ignored in state {}",
                               formatState(m_state.load(std::memory_order_acquire)));
-                return std::nullopt;
+                break;
         }
         return std::nullopt;
     }
 
-    std::optional<Event> Session::handleStart(const std::optional<WindowContext>& window) {
-        std::lock_guard<std::mutex> guard(m_mutex);
-
-        if (m_state.load(std::memory_order_acquire) != State::Idle) {
+    std::optional<Event> Session::handleStart(
+        const std::optional<WindowContext>& window) {
+        std::lock_guard lock(m_mutex);
+        if (m_state.load(std::memory_order_acquire) == State::Idle)
+            beginRecording(window);
+        else
             spdlog::debug("start ignored, already {}",
                           formatState(m_state.load(std::memory_order_acquire)));
-            return std::nullopt;
-        }
-
-        m_window                = window;
-        m_clientOwnsInjection   = window.has_value();
-        m_audio.start();
-        setState(State::Recording);
         return std::nullopt;
     }
 
     std::optional<Event> Session::handleStop() {
-        std::lock_guard<std::mutex> guard(m_mutex);
-
-        if (m_state.load(std::memory_order_acquire) != State::Recording) {
+        std::lock_guard lock(m_mutex);
+        if (m_state.load(std::memory_order_acquire) == State::Recording)
+            startFinalization();
+        else
             spdlog::debug("stop ignored in state {}",
                           formatState(m_state.load(std::memory_order_acquire)));
-            return std::nullopt;
-        }
-
-        auto pcm = m_audio.stop();
-        startTranscription(std::move(pcm));
         return std::nullopt;
     }
 
     std::optional<Event> Session::handleCancel() {
-        std::lock_guard<std::mutex> guard(m_mutex);
+        std::unique_lock lock(m_mutex);
+        const State current = m_state.load(std::memory_order_acquire);
+        if (current == State::Idle)
+            return std::nullopt;
 
-        const auto cur = m_state.load(std::memory_order_acquire);
-        if (cur == State::Recording) {
+        if (current == State::Recording) {
             m_audio.cancel();
-        } else if (cur == State::Idle) {
-            // Nothing to cancel; a stray `cancel` command is common
-            // from a keybind pressed at the wrong time and should
-            // not surface an error.
-            return std::nullopt;
-        } else if (cur == State::Transcribing) {
-            // Whisper doesn't expose a cancellation hook to abort
-            // whisper_full mid-inference; the utterance completes
-            // and its result is dropped by completeTranscription
-            // when it sees state == Cancelled.
+            ++m_generation;
+            m_window.reset();
             setState(State::Cancelled);
-            return std::nullopt;
+            lock.unlock();
+            m_transcription.cancel();
+            lock.lock();
+            setState(State::Idle);
+        } else if (current == State::Transcribing) {
+            // finish() may already be inside Moonshine. Mark cancellation now;
+            // completeTranscription drops its result and returns to Idle.
+            setState(State::Cancelled);
         }
-
-        m_window.reset();
-        setState(State::Cancelled);
-
-        // Auto-return to Idle so the widget's cancelled glow doesn't
-        // stick. Doing this inline (rather than after a delay) keeps
-        // the daemon single-threaded and predictable; the widget
-        // handles the transient state visualisation.
-        setState(State::Idle);
         return std::nullopt;
     }
 
     std::optional<Event> Session::handleStatus() {
         return event::StatusReply{
             .state      = m_state.load(std::memory_order_acquire),
-            .model_path = m_whisper.modelPath().string(),
+            .model_path = m_transcription.modelPath().string(),
         };
     }
 
     std::optional<Event> Session::handleReload() {
-        // Config reload arrives in M4; for M1 return an informative
-        // error rather than silently doing nothing, so users who wire
-        // this to a keybind can see the response in their logs.
-        return event::Error{
-            .message = "reload not implemented yet (arrives in M4)",
-        };
+        return event::Error{.message = "reload not implemented yet"};
     }
 
     std::optional<Event> Session::handleIdentify(const std::string& role) {
-        // M2.2 records the identify by logging. M2.8 wires it up to
-        // gate the daemon's wtype fallback so a connected plugin
-        // owns injection and the daemon doesn't double-type.
-        //
-        // The empty-role case falls through as "anonymous"; treating
-        // it as an error would break the CLI which doesn't identify.
-        if (role.empty()) {
-            spdlog::debug("client identify with empty role, treating as anonymous");
-        } else {
+        if (!role.empty())
             spdlog::info("client identified as role={}", role);
-        }
         return std::nullopt;
     }
 
-    void Session::startTranscription(std::vector<float> pcm) {
-        // Transition to Transcribing here rather than in each caller
-        // (handleToggle, handleStop). Callers hold m_mutex over the
-        // whole state change, so setState-under-lock is safe, and
-        // there's exactly one StateChanged event on the wire per
-        // recording end.
-        setState(State::Transcribing);
+    void Session::beginRecording(const std::optional<WindowContext>& window) {
+        m_window              = window;
+        m_clientOwnsInjection = window.has_value();
+        const std::uint64_t generation = ++m_generation;
 
-        // Compose the initial_prompt on the current thread so the
-        // supplier sees the same m_window value the caller just
-        // captured. Passing an owned std::string into the worker
-        // lambda avoids lifetime issues with the config's storage.
-        std::string prompt;
+        std::string keyterms;
         if (m_promptSupplier)
-            prompt = m_promptSupplier(m_window);
+            keyterms = m_promptSupplier(m_window);
 
-        // Launch a detached worker per utterance. Whisper inference
-        // is CPU-heavy (hundreds of milliseconds even for short
-        // clips) and running it on the IPC thread would freeze
-        // incoming state queries. A per-call thread is fine because
-        // toggle-flow has one utterance in flight at a time, gated by
-        // the state machine.
-        std::thread([this, pcm = std::move(pcm), prompt = std::move(prompt)]() mutable {
-            try {
-                auto text = m_whisper.transcribe(pcm, prompt);
-                completeTranscription(std::move(text));
-            } catch (const std::exception& e) {
-                failTranscription(std::string{"whisper: "} + e.what());
-            }
-        }).detach();
+        try {
+            m_transcription.start(
+                std::move(keyterms),
+                [this, generation](const std::string& text) {
+                    emitPartial(generation, text);
+                },
+                [this, generation](const std::string& reason) {
+                    emitStreamingError(generation, reason);
+                });
+            m_audio.start([this](std::span<const float> pcm) {
+                m_transcription.addAudio(pcm);
+            });
+        } catch (...) {
+            m_audio.cancel();
+            m_transcription.cancel();
+            m_window.reset();
+            m_clientOwnsInjection = false;
+            throw;
+        }
+
+        setState(State::Recording);
     }
 
-    void Session::completeTranscription(std::string text) {
+    void Session::startFinalization() {
+        m_audio.stop();
+        setState(State::Transcribing);
+        const std::uint64_t generation = m_generation;
+
+        m_finishWorker = std::jthread([this, generation] {
+            try {
+                completeTranscription(generation, m_transcription.finish());
+            } catch (const std::exception& e) {
+                failTranscription(generation, e.what());
+            }
+        });
+    }
+
+    void Session::emitPartial(std::uint64_t generation, const std::string& text) {
+        {
+            std::lock_guard lock(m_mutex);
+            const State current = m_state.load(std::memory_order_acquire);
+            if (generation != m_generation ||
+                (current != State::Recording && current != State::Transcribing)) {
+                return;
+            }
+        }
+        m_emitter(event::Transcript{.text = text, .final = false});
+    }
+
+    void Session::emitStreamingError(std::uint64_t generation,
+                                     const std::string& reason) {
+        {
+            std::lock_guard lock(m_mutex);
+            if (generation != m_generation ||
+                m_state.load(std::memory_order_acquire) != State::Recording) {
+                return;
+            }
+
+            // This callback runs on Moonshine's polling worker, so it cannot
+            // call transcription.cancel() (that would join itself). Stopping
+            // capture bounds the failed stream; MoonshineEngine::start or its
+            // destructor reclaims that stale handle after the worker exits.
+            m_audio.cancel();
+            m_window.reset();
+            setState(State::Error);
+            setState(State::Idle);
+        }
+        spdlog::error("streaming transcription failed: {}", reason);
+        m_emitter(event::Error{.message = "moonshine: " + reason});
+    }
+
+    void Session::completeTranscription(std::uint64_t generation, std::string text) {
         std::optional<WindowContext> window;
         bool clientOwns = false;
         {
-            std::lock_guard<std::mutex> guard(m_mutex);
-
-            // If the user cancelled during transcribe, drop the text
-            // on the floor and reset to Idle. The emitter already
-            // published Cancelled from handleCancel.
+            std::lock_guard lock(m_mutex);
+            if (generation != m_generation)
+                return;
             if (m_state.load(std::memory_order_acquire) == State::Cancelled) {
                 m_window.reset();
                 setState(State::Idle);
@@ -233,55 +237,36 @@ namespace hyprdictate {
             return;
         }
 
-        // The transcript event fans out to every subscriber, whether
-        // or not the daemon itself will type. Plugin-owned recordings
-        // rely on the plugin listening for this and driving its own
-        // wlr_virtual_keyboard_v1 injection.
-        m_emitter(event::Transcript{ .text = text });
-
-        // Suppress the internal wtype fallback when the client owns
-        // injection. Doing this per-recording (rather than by "is
-        // any plugin connected") lets a shell `hyprdictate toggle`
-        // still type via wtype while a plugin is loaded, because
-        // that recording had no window context and therefore no
-        // client injector committed to it.
+        m_emitter(event::Transcript{.text = text, .final = true});
         if (clientOwns) {
             spdlog::info("wtype skipped: recording owned by client");
             return;
         }
-
-        // Injection happens outside the mutex: it may block on a
-        // subprocess spawn and shouldn't hold up incoming commands.
         if (m_injector)
             m_injector(text, window);
     }
 
-    void Session::failTranscription(std::string reason) {
+    void Session::failTranscription(std::uint64_t generation, std::string reason) {
         {
-            std::lock_guard<std::mutex> guard(m_mutex);
+            std::lock_guard lock(m_mutex);
+            if (generation != m_generation)
+                return;
             m_window.reset();
+            if (m_state.load(std::memory_order_acquire) == State::Cancelled) {
+                setState(State::Idle);
+                return;
+            }
             setState(State::Error);
             setState(State::Idle);
         }
         spdlog::error("transcription failed: {}", reason);
-        m_emitter(event::Error{ .message = std::move(reason) });
+        m_emitter(event::Error{.message = "moonshine: " + std::move(reason)});
     }
 
-    void Session::setState(State s) {
-        // Callers hold m_mutex; the atomic store publishes to
-        // observers that read state() lock-free.
-        m_state.store(s, std::memory_order_release);
-
-        // Idle is the terminal state at the end of every recording
-        // lifecycle (successful, cancelled, or errored). Resetting
-        // the ownership flag here — rather than at each individual
-        // callsite — means a future codepath that transitions to
-        // Idle without going through completeTranscription/
-        // failTranscription/handleCancel still gets a clean slate
-        // for the next recording.
-        if (s == State::Idle)
+    void Session::setState(State state) {
+        m_state.store(state, std::memory_order_release);
+        if (state == State::Idle)
             m_clientOwnsInjection = false;
-
         emitStateEvent();
     }
 

@@ -12,7 +12,7 @@
 # - spdlog for logging
 # - hyprdictate::asio for the socket server
 # - hyprdictate::shared for the wire protocol types
-# - whisper.cpp for inference
+# - Moonshine Voice for streaming inference
 # - libpipewire-0.3 for audio capture
 
 find_package(PkgConfig REQUIRED)
@@ -82,43 +82,48 @@ pkg_check_modules(PIPEWIRE REQUIRED IMPORTED_TARGET libpipewire-0.3)
 # picks it up the same way from M2.2.
 include(${CMAKE_SOURCE_DIR}/cmake/hyprdictate_asio.cmake)
 
-find_package(whisper QUIET CONFIG)
-if(NOT whisper_FOUND)
-    pkg_check_modules(WHISPER REQUIRED IMPORTED_TARGET whisper)
-    add_library(hyprdictate_whisper INTERFACE)
-    target_link_libraries(hyprdictate_whisper INTERFACE PkgConfig::WHISPER)
-    add_library(whisper ALIAS hyprdictate_whisper)
-endif()
+find_path(MOONSHINE_INCLUDE_DIR moonshine-c-api.h REQUIRED)
+find_library(MOONSHINE_LIBRARY NAMES moonshine REQUIRED)
+add_library(hyprdictate_moonshine SHARED IMPORTED)
+set_target_properties(hyprdictate_moonshine PROPERTIES
+    IMPORTED_LOCATION "${MOONSHINE_LIBRARY}"
+    INTERFACE_INCLUDE_DIRECTORIES "${MOONSHINE_INCLUDE_DIR}"
+)
+
+find_package(Threads REQUIRED)
+
+add_library(hyprdictate_daemon_core STATIC
+    src/session.cpp
+    src/vocabulary.cpp
+)
+target_include_directories(hyprdictate_daemon_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
+target_link_libraries(hyprdictate_daemon_core
+    PUBLIC
+        hyprdictate::shared
+        spdlog::spdlog
+        Threads::Threads
+)
 
 add_executable(hyprdictated
     src/main.cpp
     src/config.cpp
-    src/whisper_engine.cpp
+    src/moonshine_engine.cpp
     src/audio.cpp
-    src/session.cpp
     src/ipc.cpp
     src/inject.cpp
-    src/vocabulary.cpp
 )
 
 target_include_directories(hyprdictated PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 
 target_link_libraries(hyprdictated
     PRIVATE
-        hyprdictate::shared
+        hyprdictate_daemon_core
         hyprdictate::asio
         tomlplusplus::tomlplusplus
-        spdlog::spdlog
         CLI11::CLI11
-        whisper
+        hyprdictate_moonshine
         PkgConfig::PIPEWIRE
+        Threads::Threads
 )
-
-# Threads::Threads is a transitive dep of both asio (for std::thread
-# in signal handling) and whisper (Threads::Threads is exported in
-# its cmake config on some builds); declaring it here explicitly
-# keeps link-time errors out of the "why doesn't asio compile" pile.
-find_package(Threads REQUIRED)
-target_link_libraries(hyprdictated PRIVATE Threads::Threads)
 
 install(TARGETS hyprdictated RUNTIME)

@@ -84,13 +84,11 @@ namespace hyprdictate {
             const auto  bytes = chunk->size;
             const auto  off   = chunk->offset;
 
-            if (bytes > 0) {
+            if (bytes > 0 && self.m_onChunk) {
                 const auto* base   = static_cast<const std::uint8_t*>(buf->datas[0].data);
                 const auto* frames = reinterpret_cast<const float*>(base + off);
                 const auto  count  = bytes / sizeof(float);
-
-                std::lock_guard<std::mutex> guard(self.m_bufMutex);
-                self.m_pcm.insert(self.m_pcm.end(), frames, frames + count);
+                self.m_onChunk(std::span<const float>{frames, count});
             }
         }
 
@@ -160,22 +158,15 @@ namespace hyprdictate {
     }
 
     bool AudioCapture::isCapturing() const noexcept {
-        return m_capturing;
+        return m_capturing.load(std::memory_order_acquire);
     }
 
-    void AudioCapture::start() {
-        if (m_capturing)
+    void AudioCapture::start(ChunkCallback onChunk) {
+        if (m_capturing.load(std::memory_order_acquire))
             return;
 
         pw_thread_loop_lock(m_loop);
-
-        // Reset the PCM buffer under the same lock the process
-        // callback would append under, so a start() racing a stale
-        // process tick can't pick up leftovers from the previous run.
-        {
-            std::lock_guard<std::mutex> guard(m_bufMutex);
-            m_pcm.clear();
-        }
+        m_onChunk = std::move(onChunk);
 
         pw_properties* props = pw_properties_new(
             PW_KEY_MEDIA_TYPE,     "Audio",
@@ -204,7 +195,7 @@ namespace hyprdictate {
         std::memset(hook, 0, sizeof(spa_hook));
         pw_stream_add_listener(m_stream, hook, &kStreamEvents, this);
 
-        // Build the format spec: F32 mono at whisper's native 16 kHz.
+        // Build the format spec: F32 mono at Moonshine's native 16 kHz.
         // Setting rate and channels here (rather than leaving them
         // empty as the audio-capture example does) asks PipeWire's
         // audio adapter to resample from the source to what we need.
@@ -232,48 +223,35 @@ namespace hyprdictate {
             throw AudioError("pw_stream_connect failed");
         }
 
-        m_capturing = true;
+        m_capturing.store(true, std::memory_order_release);
         pw_thread_loop_unlock(m_loop);
 
         spdlog::info("audio: capture started");
     }
 
-    std::vector<float> AudioCapture::stop() {
-        if (!m_capturing)
-            return {};
+    void AudioCapture::stop() {
+        if (!m_capturing.load(std::memory_order_acquire))
+            return;
 
         pw_thread_loop_lock(m_loop);
         tearDownStreamLocked();
-        m_capturing = false;
-
-        std::vector<float> out;
-        {
-            std::lock_guard<std::mutex> guard(m_bufMutex);
-            out = std::move(m_pcm);
-            m_pcm.clear();
-        }
+        m_capturing.store(false, std::memory_order_release);
+        m_onChunk = {};
         pw_thread_loop_unlock(m_loop);
 
-        spdlog::info("audio: capture stopped ({} samples, ~{:.2f}s)",
-                     out.size(),
-                     static_cast<double>(out.size()) / kSampleRate);
-        return out;
+        spdlog::info("audio: capture stopped");
     }
 
     void AudioCapture::cancel() {
-        if (!m_capturing) {
-            std::lock_guard<std::mutex> guard(m_bufMutex);
-            m_pcm.clear();
+        if (!m_capturing.load(std::memory_order_acquire)) {
+            m_onChunk = {};
             return;
         }
 
         pw_thread_loop_lock(m_loop);
         tearDownStreamLocked();
-        m_capturing = false;
-        {
-            std::lock_guard<std::mutex> guard(m_bufMutex);
-            m_pcm.clear();
-        }
+        m_capturing.store(false, std::memory_order_release);
+        m_onChunk = {};
         pw_thread_loop_unlock(m_loop);
 
         spdlog::info("audio: capture cancelled");

@@ -19,9 +19,7 @@
 namespace hyprdictate {
 
     // Focused-window context. Sent by the Hyprland plugin with `start`
-    // so the daemon can compose per-class vocabulary into whisper's
-    // initial_prompt. CLI clients omit this field; the daemon then
-    // uses global vocabulary alone.
+    // so the daemon can compose per-class vocabulary into Moonshine keyterms.
     //
     // `class` is a reserved C++ keyword, so the struct field is `cls`
     // and the JSON key remains `class` on the wire.
@@ -81,7 +79,9 @@ namespace hyprdictate {
     // Error carries structured failure to the requesting client.
     namespace event {
         struct StateChanged { State value; };
-        struct Transcript   { std::string text; };
+        // Partial transcripts are complete replaceable previews. Only events
+        // with final=true may be injected into the target application.
+        struct Transcript   { std::string text; bool final = true; };
         struct StatusReply  {
             State                       state;
             std::optional<std::string>  model_path;

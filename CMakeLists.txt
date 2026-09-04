@@ -30,7 +30,7 @@ add_compile_options(
 )
 
 # Per-target build gates. The three components have disjoint runtime
-# deps (daemon needs PipeWire+whisper, CLI needs almost nothing,
+# deps (daemon needs PipeWire+Moonshine, CLI needs almost nothing,
 # plugin needs Hyprland), so each Nix derivation flips one on and
 # the others off to keep its closure minimal. Defaults preserve the
 # existing single-command `cmake -B build` flow for developers who
@@ -56,6 +56,11 @@ endif()
 
 if(HYPRDICTATE_BUILD_PLUGIN)
     add_subdirectory(plugin)
+endif()
+
+include(CTest)
+if(BUILD_TESTING AND HYPRDICTATE_BUILD_DAEMON)
+    add_subdirectory(tests)
 endif()
 
 # The systemd user unit is a daemon-side artefact; install it only

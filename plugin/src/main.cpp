@@ -5,6 +5,7 @@
 #include <string>
 
 #include <hyprland/src/config/values/ConfigValues.hpp>
+#include <nlohmann/json.hpp>
 #include <hyprland/src/config/values/types/BoolValue.hpp>
 #include <hyprland/src/config/values/types/ColorValue.hpp>
 #include <hyprland/src/helpers/Color.hpp>
@@ -69,22 +70,30 @@ namespace {
                                hyprdictate::formatState(s));
     }
 
-    void onDaemonTranscript(const std::string& text) {
+    void onDaemonTranscript(const std::string& text, bool final) {
+        // Socket2 is line-delimited, so JSON-encode transcript text before
+        // forwarding it. This safely carries commas, quotes, and newlines to
+        // the Noctalia live-preview consumer.
+        if (g_pEventManager) {
+            g_pEventManager->postEvent(SHyprIPCEvent{
+                .event = "hyprdictate",
+                .data  = std::string{final ? "transcript," : "partial,"}
+                       + nlohmann::json{text}.dump(),
+            });
+        }
+
+        // Streaming hypotheses are replaceable and must never touch the
+        // target application. Only Moonshine's final drained transcript is
+        // eligible for deterministic injection.
+        if (!final)
+            return;
+
         if (!hyprdictate::g_plugin.injector) {
             hyprdictate::log::warn(
                 "transcript arrived but injector not initialised");
             return;
         }
 
-        // Snapshot then clear the captured window before the inject
-        // call. If targetWindow is empty here (weak ref points at
-        // nothing), this transcript came from a non-plugin recording
-        // (CLI toggle, etc.) — injector's own null check refuses to
-        // fire and daemon-side wtype handles it. If targetWindow is
-        // set, this was a plugin-dispatched recording and the plugin
-        // injects into its captured target. Clearing after the call
-        // ensures the next non-plugin recording doesn't inject into
-        // a stale window from an earlier plugin dispatch.
         const auto target = hyprdictate::g_plugin.targetWindow;
         hyprdictate::g_plugin.targetWindow.reset();
 

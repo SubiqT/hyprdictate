@@ -218,7 +218,8 @@ namespace hyprdictate {
                 if constexpr (std::is_same_v<T, event::StateChanged>) {
                     if (m_callbacks.onState) m_callbacks.onState(x.value);
                 } else if constexpr (std::is_same_v<T, event::Transcript>) {
-                    if (m_callbacks.onTranscript) m_callbacks.onTranscript(x.text);
+                    if (m_callbacks.onTranscript)
+                        m_callbacks.onTranscript(x.text, x.final);
                 } else if constexpr (std::is_same_v<T, event::Error>) {
                     if (m_callbacks.onError) m_callbacks.onError(x.message);
                 } else if constexpr (std::is_same_v<T, event::StatusReply>) {

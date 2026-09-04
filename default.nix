@@ -13,7 +13,7 @@
   # daemon-only libraries
   spdlog ? null,
   tomlplusplus ? null,
-  whisper-cpp ? null,
+  moonshine-voice ? null,
   pipewire ? null,
   wtype ? null,
   # Which components to build. Each nix output flips exactly one of
@@ -57,9 +57,14 @@ stdenv.mkDerivation {
   ] ++ lib.optionals isDaemon [
     spdlog
     tomlplusplus
-    whisper-cpp
+    moonshine-voice
     pipewire
   ];
+
+  doCheck = isDaemon;
+  checkPhase = lib.optionalString isDaemon ''
+    ctest --test-dir . --output-on-failure
+  '';
 
   # Toggle per-component build gates. The other two components are
   # excluded so their configure-time dep checks don't fire.

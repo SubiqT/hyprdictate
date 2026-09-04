@@ -30,7 +30,7 @@ ExecStart=@HYPRDICTATE_DAEMON_PATH@ --config %h/.config/hyprdictate/config.toml
 Restart=on-failure
 RestartSec=2s
 
-# Kill the daemon and its subprocesses (whisper worker threads,
+# Kill the daemon and its subprocesses (streaming/finalization workers,
 # wtype subprocesses) as a group on stop so a wtype hung on a
 # missing Wayland display doesn't outlive the service.
 KillMode=mixed
