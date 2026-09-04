@@ -12,7 +12,9 @@ when recording began.
   Hyprland plugin to socket2 for live UI preview.
 - Partial text is **never typed into applications**. Moonshine may revise it.
 - Stopping drains the stream, emits one final transcript, and injects that final
-  text into the original target window.
+  text into the original target window only after all physical keys, pointer
+  buttons, and modifiers are released. If input remains held for two seconds, injection is
+  dropped rather than interpreted as compositor shortcuts.
 - Cancelling while recording discards the stream immediately. Cancelling while
   the final drain is in progress marks the session cancelled and drops its
   result when Moonshine returns.

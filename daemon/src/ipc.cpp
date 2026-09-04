@@ -22,6 +22,14 @@ namespace hyprdictate {
         {}
 
         void start() {
+            // Subscribers may connect after a recording transition or after a
+            // daemon/widget startup race. Seed them with the current state
+            // before waiting for future broadcasts so partial transcripts are
+            // rendered immediately rather than hidden behind a stale Idle UI.
+            send(event::StatusReply{
+                .state      = m_server.m_session.state(),
+                .model_path = std::nullopt,
+            });
             readNextLine();
         }
 

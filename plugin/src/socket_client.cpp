@@ -223,11 +223,11 @@ namespace hyprdictate {
                 } else if constexpr (std::is_same_v<T, event::Error>) {
                     if (m_callbacks.onError) m_callbacks.onError(x.message);
                 } else if constexpr (std::is_same_v<T, event::StatusReply>) {
-                    // Not consumed today. M2.6 will subscribe to
-                    // status replies for the border-indicator config
-                    // flag; adding it now avoids an unused-visitor
-                    // warning in the interim.
-                    (void)x;
+                    // The daemon seeds every new connection with a status
+                    // snapshot. Synchronize before dispatchers accept a toggle
+                    // so a reconnect during Recording cannot overwrite the
+                    // original target or send an ignored Start command.
+                    if (m_callbacks.onState) m_callbacks.onState(x.state);
                 }
             }, ev);
         } catch (const ProtocolError& e) {
